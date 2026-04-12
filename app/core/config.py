@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     media_dir: str = "media"
     media_url_prefix: str = "/media"
     seed_demo_data: bool = True
+    verification_token_expire_hours: int = 24
 
 
 settings = Settings()

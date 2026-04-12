@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -15,6 +16,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
+
+
+def hash_raw_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
 def create_token(subject: str, expires_delta: timedelta, token_type: str) -> str:

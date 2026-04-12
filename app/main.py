@@ -5,13 +5,13 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.db.base import Base
+from app.db.migrate import ensure_sqlite_schema
 from app.db.seed import seed_animals_if_empty
 from app.db.session import SessionLocal, engine
 from app.modules.animals.router import router as animals_router
 from app.modules.auth.router import router as auth_router
 
-# Import models so SQLAlchemy metadata contains all tables.
-from app import models  # noqa: F401
+from app import models
 
 
 app = FastAPI(title=settings.app_name)
@@ -20,6 +20,7 @@ Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    ensure_sqlite_schema(engine)
     Base.metadata.create_all(bind=engine)
     if settings.seed_demo_data:
         db = SessionLocal()

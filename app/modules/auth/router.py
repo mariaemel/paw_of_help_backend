@@ -5,10 +5,15 @@ from app.db.session import get_db
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import (
     LoginRequest,
-    RegisterRequest,
+    RegisterOrganizationRequest,
+    RegisterResponse,
+    RegisterUserRequest,
+    RegisterVolunteerRequest,
     TokenPairResponse,
     TokenRefreshRequest,
     UserResponse,
+    VerifyEmailRequest,
+    VerifyPhoneRequest,
 )
 from app.modules.auth.service import AuthService
 
@@ -19,9 +24,29 @@ def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
     return AuthService(AuthRepository(db))
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, service: AuthService = Depends(get_auth_service)):
-    return service.register(payload)
+@router.post("/register/user", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+def register_user(payload: RegisterUserRequest, service: AuthService = Depends(get_auth_service)):
+    return service.register_user(payload)
+
+
+@router.post("/register/volunteer", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+def register_volunteer(payload: RegisterVolunteerRequest, service: AuthService = Depends(get_auth_service)):
+    return service.register_volunteer(payload)
+
+
+@router.post("/register/organization", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+def register_organization(payload: RegisterOrganizationRequest, service: AuthService = Depends(get_auth_service)):
+    return service.register_organization(payload)
+
+
+@router.post("/verify-email", response_model=UserResponse)
+def verify_email(payload: VerifyEmailRequest, service: AuthService = Depends(get_auth_service)):
+    return service.verify_email(payload.token)
+
+
+@router.post("/verify-phone", response_model=UserResponse)
+def verify_phone(payload: VerifyPhoneRequest, service: AuthService = Depends(get_auth_service)):
+    return service.verify_phone(payload.token)
 
 
 @router.post("/login", response_model=TokenPairResponse)
