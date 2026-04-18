@@ -2,6 +2,19 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
+def _has_table(conn, name: str) -> bool:
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"),
+        {"n": name},
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    rows = conn.execute(text(f"PRAGMA table_info('{table}')")).fetchall()
+    return {row[1] for row in rows}
+
+
 def ensure_sqlite_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
@@ -19,3 +32,65 @@ def ensure_sqlite_schema(engine: Engine) -> None:
 
         if "is_phone_verified" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN is_phone_verified BOOLEAN DEFAULT 0 NOT NULL"))
+
+        if not _has_table(conn, "organizations"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE organizations (
+                        id INTEGER NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        city VARCHAR(120),
+                        address VARCHAR(500),
+                        latitude FLOAT,
+                        longitude FLOAT,
+                        specialization VARCHAR(20) NOT NULL,
+                        needs_json TEXT,
+                        wards_count INTEGER NOT NULL,
+                        adopted_yearly_count INTEGER NOT NULL,
+                        description TEXT,
+                        created_at DATETIME,
+                        PRIMARY KEY (id)
+                    )
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_name ON organizations (name)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_city ON organizations (city)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_specialization ON organizations (specialization)"))
+
+        if _has_table(conn, "animals"):
+            ac = _table_columns(conn, "animals")
+            alters: list[tuple[str, str]] = [
+                ("organization_id", "INTEGER"),
+                ("species", "VARCHAR(20) DEFAULT 'cat' NOT NULL"),
+                ("breed", "VARCHAR(120)"),
+                ("full_description", "TEXT"),
+                ("health_checklist_json", "TEXT"),
+                ("health_features", "TEXT"),
+                ("treatment_required", "TEXT"),
+                ("character_tags_json", "TEXT"),
+                ("is_vaccinated", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("is_sterilized", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("is_litter_trained", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("is_child_friendly", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("is_animal_friendly", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("has_health_issues", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("urgent_needs_text", "TEXT"),
+            ]
+            for col, ddl in alters:
+                if col not in ac:
+                    conn.execute(text(f"ALTER TABLE animals ADD COLUMN {col} {ddl}"))
+
+            ac2 = _table_columns(conn, "animals")
+            if "organization_id" in ac2:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_animals_organization_id ON animals (organization_id)"
+                    )
+                )
+            for idx_col in ("species", "is_vaccinated", "is_sterilized", "has_health_issues"):
+                if idx_col in ac2:
+                    conn.execute(
+                        text(f"CREATE INDEX IF NOT EXISTS ix_animals_{idx_col} ON animals ({idx_col})")
+                    )

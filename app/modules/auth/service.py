@@ -18,6 +18,7 @@ from app.models.profile import (
     UserProfile,
     VolunteerProfile,
 )
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.models.verification_token import VerificationPurpose
 from app.modules.auth.repository import AuthRepository
@@ -173,6 +174,19 @@ class AuthService:
                         comment=payload.verification.comment,
                     )
                 )
+
+            org_spec = (payload.specialization or "both").strip().lower()
+            if org_spec not in {"cat", "dog", "both"}:
+                org_spec = "both"
+            self.repo.db.add(
+                Organization(
+                    name=payload.display_name,
+                    city=payload.work_territory,
+                    specialization=org_spec,
+                    description=payload.description,
+                    needs_json="[]",
+                )
+            )
 
             email_raw, phone_raw = self._issue_verification_tokens(user.id, phone)
             self.repo.db.commit()

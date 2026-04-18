@@ -1,4 +1,5 @@
 from app.models.animal import Animal, AnimalPhoto
+from app.models.organization import Organization
 from app.models.profile import (
     OrganizationContact,
     OrganizationProfile,
@@ -13,6 +14,7 @@ __all__ = [
     "User",
     "Animal",
     "AnimalPhoto",
+    "Organization",
     "UserProfile",
     "VolunteerProfile",
     "OrganizationProfile",

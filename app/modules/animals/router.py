@@ -25,6 +25,13 @@ def list_animals(
     city: str | None = Query(default=None),
     status: str | None = Query(default=None),
     sex: str | None = Query(default=None),
+    species: str | None = Query(default=None),
+    organization_id: int | None = Query(default=None),
+    age_group: str | None = Query(default=None, description="baby | adult"),
+    features: str | None = Query(
+        default=None,
+        description="Через запятую: vaccinated,sterilized,...",
+    ),
     is_urgent: bool | None = Query(default=None),
     min_age_months: int | None = Query(default=None, ge=0),
     max_age_months: int | None = Query(default=None, ge=0),
@@ -33,11 +40,18 @@ def list_animals(
     sort_by: str = Query(default="created_at"),
     service: AnimalService = Depends(get_animal_service),
 ):
+    feat_list: list[str] = []
+    if features:
+        feat_list = [x.strip() for x in features.split(",") if x.strip()]
     filters = AnimalFilterParams(
         q=q,
         city=city,
         status=status,
         sex=sex,
+        species=species,
+        organization_id=organization_id,
+        age_group=age_group,
+        features=feat_list,
         is_urgent=is_urgent,
         min_age_months=min_age_months,
         max_age_months=max_age_months,

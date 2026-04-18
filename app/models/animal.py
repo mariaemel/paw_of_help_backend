@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
 
@@ -13,10 +15,17 @@ class AnimalSex(str, Enum):
     UNKNOWN = "unknown"
 
 
+class AnimalSpecies(str, Enum):
+    CAT = "cat"
+    DOG = "dog"
+    OTHER = "other"
+
+
 class AnimalStatus(str, Enum):
     LOOKING_FOR_HOME = "looking_for_home"
     IN_SHELTER = "in_shelter"
     ON_TREATMENT = "on_treatment"
+    LOOKING_FOR_FOSTER = "looking_for_foster"
     ADOPTED = "adopted"
     ARCHIVED = "archived"
 
@@ -25,22 +34,46 @@ class Animal(Base):
     __tablename__ = "animals"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True, nullable=True)
+
     name: Mapped[str] = mapped_column(String(120), index=True)
-    sex: Mapped[AnimalSex] = mapped_column(String(20), default=AnimalSex.UNKNOWN.value)
+    species: Mapped[str] = mapped_column(String(20), default=AnimalSpecies.CAT.value, index=True)
+    breed: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    sex: Mapped[str] = mapped_column(String(20), default=AnimalSex.UNKNOWN.value)
     age_months: Mapped[int] = mapped_column(Integer, default=0)
+
     short_story: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    health_checklist_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_features: Mapped[str | None] = mapped_column(Text, nullable=True)
+    treatment_required: Mapped[str | None] = mapped_column(Text, nullable=True)
     health_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    character_tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     character_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    is_vaccinated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_sterilized: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_litter_trained: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_child_friendly: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_animal_friendly: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_health_issues: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
     location_city: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    urgent_needs_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     status: Mapped[str] = mapped_column(String(40), default=AnimalStatus.IN_SHELTER.value, index=True)
     help_options: Mapped[str | None] = mapped_column(Text, nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
     photos: Mapped[list["AnimalPhoto"]] = relationship(
         "AnimalPhoto", back_populates="animal", cascade="all, delete-orphan"
     )
+    organization: Mapped["Organization | None"] = relationship("Organization", back_populates="animals")
 
 
 class AnimalPhoto(Base):

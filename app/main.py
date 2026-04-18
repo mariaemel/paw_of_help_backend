@@ -6,10 +6,12 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.db.base import Base
 from app.db.migrate import ensure_sqlite_schema
-from app.db.seed import seed_animals_if_empty
+from app.db.seed import seed_demo_data_if_empty
 from app.db.session import SessionLocal, engine
 from app.modules.animals.router import router as animals_router
 from app.modules.auth.router import router as auth_router
+from app.modules.organizations.router import router as organizations_router
+from app.modules.volunteers.router import router as volunteers_router
 
 from app import models
 
@@ -25,7 +27,7 @@ def on_startup() -> None:
     if settings.seed_demo_data:
         db = SessionLocal()
         try:
-            seed_animals_if_empty(db)
+            seed_demo_data_if_empty(db)
         finally:
             db.close()
 
@@ -37,4 +39,6 @@ def health() -> dict[str, str]:
 
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(animals_router, prefix=settings.api_prefix)
+app.include_router(organizations_router, prefix=settings.api_prefix)
+app.include_router(volunteers_router, prefix=settings.api_prefix)
 app.mount(settings.media_url_prefix, StaticFiles(directory=settings.media_dir), name="media")
