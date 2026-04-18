@@ -38,3 +38,9 @@ class User(Base):
     verification_tokens: Mapped[list["VerificationToken"]] = relationship(
         "VerificationToken", back_populates="user", cascade="all, delete-orphan"
     )
+    volunteer_reviews_received: Mapped[list["VolunteerReview"]] = relationship(
+        "VolunteerReview",
+        foreign_keys="VolunteerReview.volunteer_user_id",
+        back_populates="volunteer",
+        cascade="all, delete-orphan",
+    )

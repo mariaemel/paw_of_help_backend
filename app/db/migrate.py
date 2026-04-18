@@ -94,3 +94,71 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     conn.execute(
                         text(f"CREATE INDEX IF NOT EXISTS ix_animals_{idx_col} ON animals ({idx_col})")
                     )
+
+        if _has_table(conn, "volunteer_profiles"):
+            vp = _table_columns(conn, "volunteer_profiles")
+            vp_alters: list[tuple[str, str]] = [
+                ("about_me", "TEXT"),
+                ("animal_types_json", "TEXT"),
+                ("competencies_json", "TEXT"),
+                ("experience_level", "VARCHAR(40)"),
+                ("avatar_path", "VARCHAR(500)"),
+                ("rating", "FLOAT DEFAULT 0 NOT NULL"),
+                ("completed_tasks_count", "INTEGER DEFAULT 0 NOT NULL"),
+                ("is_available", "BOOLEAN DEFAULT 1 NOT NULL"),
+                ("latitude", "FLOAT"),
+                ("longitude", "FLOAT"),
+            ]
+            for col, ddl in vp_alters:
+                if col not in vp:
+                    conn.execute(text(f"ALTER TABLE volunteer_profiles ADD COLUMN {col} {ddl}"))
+            vp2 = _table_columns(conn, "volunteer_profiles")
+            if "experience_level" in vp2:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_volunteer_profiles_experience_level "
+                        "ON volunteer_profiles (experience_level)"
+                    )
+                )
+            if "rating" in vp2:
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_volunteer_profiles_rating ON volunteer_profiles (rating)")
+                )
+            if "is_available" in vp2:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_volunteer_profiles_is_available "
+                        "ON volunteer_profiles (is_available)"
+                    )
+                )
+
+        if not _has_table(conn, "volunteer_reviews"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE volunteer_reviews (
+                        id INTEGER NOT NULL,
+                        volunteer_user_id INTEGER NOT NULL,
+                        author_name VARCHAR(255) NOT NULL,
+                        author_avatar_path VARCHAR(500),
+                        review_date DATETIME NOT NULL,
+                        rating INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        created_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(volunteer_user_id) REFERENCES users (id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_volunteer_reviews_volunteer_user_id "
+                    "ON volunteer_reviews (volunteer_user_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_volunteer_reviews_review_date ON volunteer_reviews (review_date)"
+                )
+            )

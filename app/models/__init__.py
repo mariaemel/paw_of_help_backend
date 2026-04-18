@@ -6,6 +6,7 @@ from app.models.profile import (
     OrganizationVerification,
     UserProfile,
     VolunteerProfile,
+    VolunteerReview,
 )
 from app.models.user import User
 from app.models.verification_token import VerificationToken
@@ -17,6 +18,7 @@ __all__ = [
     "Organization",
     "UserProfile",
     "VolunteerProfile",
+    "VolunteerReview",
     "OrganizationProfile",
     "OrganizationContact",
     "OrganizationVerification",
