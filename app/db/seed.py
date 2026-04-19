@@ -1,16 +1,58 @@
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.models.animal import Animal, AnimalSpecies, AnimalStatus
+from app.core.config import settings
+from app.models.animal import Animal, AnimalPhoto, AnimalSpecies, AnimalStatus
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.organization import Organization
 from app.models.profile import VolunteerProfile, VolunteerReview
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.models.user import User, UserRole
 from app.modules.volunteers.constants import COMPETENCY_OPTIONS
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_SEED_ANIMAL_IMAGES_DIR = _REPO_ROOT / "seed_images" / "animals"
+
+_DEMO_ANIMAL_PHOTOS: dict[str, list[tuple[str, bool]]] = {
+    "Муся": [
+        ("demo_animals/musya.png", True),
+        ("demo_animals/musya_2.png", False),
+    ],
+    "Боня": [
+        ("demo_animals/bonya.png", True),
+    ],
+    "Ричи": [
+        ("demo_animals/richi.png", True),
+        ("demo_animals/richi_2.png", False),
+    ],
+}
+
+
+def _materialize_seed_animal_images() -> bool:
+    if not (_SEED_ANIMAL_IMAGES_DIR / "musya.png").is_file():
+        return False
+    dest = Path(settings.media_dir) / "demo_animals"
+    dest.mkdir(parents=True, exist_ok=True)
+    for png in sorted(_SEED_ANIMAL_IMAGES_DIR.glob("*.png")):
+        shutil.copy2(png, dest / png.name)
+    return True
+
+
+def _sync_demo_animal_photos(db: Session, animal: Animal, photos_ready: bool) -> None:
+    paths = _DEMO_ANIMAL_PHOTOS.get(animal.name)
+    if not paths or not photos_ready:
+        return
+    db.query(AnimalPhoto).filter(
+        AnimalPhoto.animal_id == animal.id,
+        AnimalPhoto.file_path.like("demo_animals/%"),
+    ).delete(synchronize_session=False)
+    for rel_path, is_primary in paths:
+        db.add(AnimalPhoto(animal_id=animal.id, file_path=rel_path, is_primary=is_primary))
 
 
 _CATALOG_ITEM_DEFS: tuple[tuple[str, str, str, int], ...] = (
@@ -194,6 +236,7 @@ def _set_animal_catalog_links(db: Session, animal_id: int, keys: tuple[tuple[str
 
 
 def ensure_demo_animals(db: Session, org1: Organization, org2: Organization) -> None:
+    photos_ready = _materialize_seed_animal_images()
 
     for spec in DEMO_ANIMALS:
         org = org2 if spec.use_second_org else org1
@@ -221,6 +264,7 @@ def ensure_demo_animals(db: Session, org1: Organization, org2: Organization) -> 
             for key, value in common.items():
                 setattr(animal, key, value)
         _set_animal_catalog_links(db, animal.id, spec.catalog_keys)
+        _sync_demo_animal_photos(db, animal, photos_ready)
 
 
 def seed_demo_data_if_empty(db: Session) -> None:
