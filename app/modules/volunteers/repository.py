@@ -1,10 +1,11 @@
 import math
 
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.profile import VolunteerProfile, VolunteerReview
 from app.models.user import User, UserRole
+from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.modules.volunteers.schemas import VolunteerFilterParams
 
 
@@ -17,6 +18,20 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         + math.cos(lat1 * p) * math.cos(lat2 * p) * (1 - math.cos((lon2 - lon1) * p)) / 2
     )
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _profile_has_competency_slug(slug: str):
+    return exists(
+        select(1)
+        .select_from(VolunteerCompetencyAssignment)
+        .join(
+            VolunteerCompetencyItem,
+            VolunteerCompetencyItem.id == VolunteerCompetencyAssignment.competency_item_id,
+        ).where(
+            VolunteerCompetencyAssignment.volunteer_profile_id == VolunteerProfile.id,
+            VolunteerCompetencyItem.slug == slug,
+        )
+    )
 
 
 class VolunteerRepository:
@@ -33,9 +48,22 @@ class VolunteerRepository:
             if row[0]
         ]
 
+    def list_competency_catalog(self) -> list[VolunteerCompetencyItem]:
+        return (
+            self.db.query(VolunteerCompetencyItem)
+            .filter(VolunteerCompetencyItem.is_active.is_(True))
+            .order_by(VolunteerCompetencyItem.sort_order.asc(), VolunteerCompetencyItem.slug.asc())
+            .all()
+        )
+
     def get_volunteer(self, user_id: int) -> tuple[User, VolunteerProfile] | None:
         row = (
             self.db.query(User, VolunteerProfile)
+            .options(
+                selectinload(User.volunteer_profile)
+                .selectinload(VolunteerProfile.competency_assignments)
+                .selectinload(VolunteerCompetencyAssignment.competency_item)
+            )
             .join(VolunteerProfile, VolunteerProfile.user_id == User.id)
             .filter(User.id == user_id, User.role == UserRole.VOLUNTEER)
             .first()
@@ -54,6 +82,11 @@ class VolunteerRepository:
         q = (
             self.db.query(User, VolunteerProfile)
             .join(VolunteerProfile, VolunteerProfile.user_id == User.id)
+            .options(
+                selectinload(User.volunteer_profile)
+                .selectinload(VolunteerProfile.competency_assignments)
+                .selectinload(VolunteerCompetencyAssignment.competency_item)
+            )
             .filter(User.role == UserRole.VOLUNTEER)
         )
 
@@ -62,8 +95,6 @@ class VolunteerRepository:
             q = q.filter(
                 or_(
                     func.lower(User.full_name).like(like),
-                    func.lower(VolunteerProfile.skills).like(like),
-                    func.lower(VolunteerProfile.experience).like(like),
                     func.lower(VolunteerProfile.about_me).like(like),
                 )
             )
@@ -83,21 +114,12 @@ class VolunteerRepository:
             )
 
         for cid in filters.competencies:
-            needle = f'%"{cid}"%'
-            q = q.filter(VolunteerProfile.competencies_json.like(needle))
-
-        if filters.experience_levels:
-            q = q.filter(VolunteerProfile.experience_level.in_(filters.experience_levels))
+            q = q.filter(_profile_has_competency_slug(cid))
 
         if filters.has_transport is True:
-            q = q.filter(VolunteerProfile.competencies_json.like('%"auto"%'))
+            q = q.filter(_profile_has_competency_slug("auto"))
         elif filters.has_transport is False:
-            q = q.filter(
-                or_(
-                    VolunteerProfile.competencies_json.is_(None),
-                    ~VolunteerProfile.competencies_json.like('%"auto"%'),
-                )
-            )
+            q = q.filter(~_profile_has_competency_slug("auto"))
 
         rows: list[tuple[User, VolunteerProfile]] = q.all()
 

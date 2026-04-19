@@ -1,10 +1,14 @@
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.volunteer_competency import VolunteerCompetencyAssignment
 
 
 class OrganizationVerificationStatus(str, Enum):
@@ -30,16 +34,11 @@ class VolunteerProfile(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
 
-    skills: Mapped[str | None] = mapped_column(Text, nullable=True)
-    experience: Mapped[str | None] = mapped_column(Text, nullable=True)
     about_me: Mapped[str | None] = mapped_column(Text, nullable=True)
     availability: Mapped[str | None] = mapped_column(Text, nullable=True)
     location_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     travel_radius_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    preferred_help_format: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    animal_categories: Mapped[str | None] = mapped_column(Text, nullable=True)
     animal_types_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    competencies_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     experience_level: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     avatar_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     rating: Mapped[float] = mapped_column(Float, default=0.0, index=True)
@@ -51,6 +50,11 @@ class VolunteerProfile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship("User", back_populates="volunteer_profile")
+    competency_assignments: Mapped[list["VolunteerCompetencyAssignment"]] = relationship(
+        "VolunteerCompetencyAssignment",
+        back_populates="volunteer_profile",
+        cascade="all, delete-orphan",
+    )
 
 
 class VolunteerReview(Base):

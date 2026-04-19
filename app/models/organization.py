@@ -9,7 +9,6 @@ from app.db.base import Base
 
 
 class Organization(Base):
-    """Публичная карточка организации для каталога (фонды, приюты)."""
 
     __tablename__ = "organizations"
 
@@ -21,8 +20,8 @@ class Organization(Base):
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     specialization: Mapped[str] = mapped_column(
         String(20), default="both", index=True
-    )  # cat | dog | both
-    needs_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str]
+    )
+    needs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     wards_count: Mapped[int] = mapped_column(Integer, default=0)
     adopted_yearly_count: Mapped[int] = mapped_column(Integer, default=0)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,8 +1,12 @@
 from fastapi import HTTPException, status
 
 from app.core.config import settings
-from app.modules.animals.constants import AGE_GROUPS, FEATURE_FILTERS, SPECIES_LABELS
-from app.modules.animals.jsonutil import parse_json_list
+from app.modules.animals.catalog_marks import (
+    build_catalog_feature_filter_options,
+    combined_catalog_feature_labels,
+    labels_for_catalog_kind,
+)
+from app.modules.animals.display_catalog import AGE_GROUPS, SPECIES_LABELS
 from app.modules.animals.repository import AnimalRepository
 from app.modules.animals.schemas import (
     AgeGroupOption,
@@ -10,12 +14,13 @@ from app.modules.animals.schemas import (
     AnimalDetail,
     AnimalFilterParams,
     AnimalListResponse,
+    CatalogTagOption,
     FeatureFilterOption,
     OrganizationBrief,
     OrganizationOption,
 )
 from app.modules.animals.storage import save_animal_image
-from app.modules.animals.tags import build_card_tags
+from app.modules.animals.tags import species_label_ru
 
 
 class AnimalService:
@@ -37,18 +42,18 @@ class AnimalService:
         return {
             "id": animal.id,
             "name": animal.name,
-            "species": species,
+            "species": species_label_ru(species, animal.sex),
             "sex": animal.sex,
             "age_months": age_m,
             "location_city": animal.location_city,
             "is_urgent": animal.is_urgent,
             "status": animal.status,
-            "short_story": animal.short_story,
+            "full_description": getattr(animal, "full_description", None),
             "primary_photo_url": primary_photo_url,
             "breed": breed,
-            "card_tags": build_card_tags(species, breed, age_m),
             "organization_id": oid,
             "organization_name": org_name,
+            "catalog_features": combined_catalog_feature_labels(animal),
         }
 
     def get_catalog(self, filters: AnimalFilterParams) -> AnimalListResponse:
@@ -60,7 +65,9 @@ class AnimalService:
         statuses, sexes, cities = self.repo.get_catalogs()
         org_opts = self.repo.list_organization_options()
         age_groups = [AgeGroupOption(**g) for g in AGE_GROUPS]
-        features = [FeatureFilterOption(id=f["id"], label=f["label"]) for f in FEATURE_FILTERS]
+        features = build_catalog_feature_filter_options(self.repo)
+        health_rows = self.repo.list_catalog_options("health_care")
+        character_rows = self.repo.list_catalog_options("character")
         return AnimalCatalogsResponse(
             statuses=statuses,
             sexes=sexes,
@@ -69,6 +76,8 @@ class AnimalService:
             species=list(SPECIES_LABELS.keys()),
             age_groups=age_groups,
             features=features,
+            health_care_tags=[CatalogTagOption(id=s, label=l) for s, l in health_rows],
+            character_tags=[CatalogTagOption(id=s, label=l) for s, l in character_rows],
             organizations=[OrganizationOption(id=o[0], name=o[1]) for o in org_opts],
         )
 
@@ -93,38 +102,32 @@ class AnimalService:
                 city=animal.organization.city,
             )
 
-        checklist = parse_json_list(getattr(animal, "health_checklist_json", None))
-        char_tags = parse_json_list(getattr(animal, "character_tags_json", None))
-        full_desc = getattr(animal, "full_description", None) or animal.short_story
+        full_desc = getattr(animal, "full_description", None)
+        checklist = labels_for_catalog_kind(animal, "health_care")
+        char_tags = labels_for_catalog_kind(animal, "character")
 
         return AnimalDetail(
             id=animal.id,
             name=animal.name,
-            species=species,
+            species=species_label_ru(species, animal.sex),
             breed=breed,
             sex=animal.sex,
             age_months=age_m,
             location_city=animal.location_city,
             is_urgent=animal.is_urgent,
             status=animal.status,
-            short_story=animal.short_story,
             full_description=full_desc,
             primary_photo_url=(
                 f"{settings.media_url_prefix}/{primary_photo.file_path}" if primary_photo else None
             ),
             photo_urls=photo_urls,
-            card_tags=build_card_tags(species, breed, age_m),
             organization=org_brief,
             health_checklist=checklist,
             health_features=getattr(animal, "health_features", None),
             treatment_required=getattr(animal, "treatment_required", None),
-            health_info=animal.health_info,
             character_tags=char_tags,
-            character_info=animal.character_info,
             help_options=animal.help_options,
             urgent_needs_text=getattr(animal, "urgent_needs_text", None),
-            latitude=animal.latitude,
-            longitude=animal.longitude,
             created_at=animal.created_at,
         )
 

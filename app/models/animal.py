@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.animal_catalog import AnimalCatalogAssignment
+    from app.models.organization import Organization
 
 
 class AnimalSex(str, Enum):
@@ -43,22 +48,10 @@ class Animal(Base):
     sex: Mapped[str] = mapped_column(String(20), default=AnimalSex.UNKNOWN.value)
     age_months: Mapped[int] = mapped_column(Integer, default=0)
 
-    short_story: Mapped[str | None] = mapped_column(Text, nullable=True)
     full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    health_checklist_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     health_features: Mapped[str | None] = mapped_column(Text, nullable=True)
     treatment_required: Mapped[str | None] = mapped_column(Text, nullable=True)
-    health_info: Mapped[str | None] = mapped_column(Text, nullable=True)
-    character_tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    character_info: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    is_vaccinated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    is_sterilized: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    is_litter_trained: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_child_friendly: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_animal_friendly: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_health_issues: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     location_city: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -73,7 +66,12 @@ class Animal(Base):
     photos: Mapped[list["AnimalPhoto"]] = relationship(
         "AnimalPhoto", back_populates="animal", cascade="all, delete-orphan"
     )
-    organization: Mapped["Organization | None"] = relationship("Organization", back_populates="animals")
+    catalog_assignments: Mapped[list["AnimalCatalogAssignment"]] = relationship(
+        "AnimalCatalogAssignment",
+        back_populates="animal",
+        cascade="all, delete-orphan",
+    )
+    organization: Mapped[Organization | None] = relationship("Organization", back_populates="animals")
 
 
 class AnimalPhoto(Base):

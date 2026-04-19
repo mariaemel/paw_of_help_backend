@@ -1,18 +1,18 @@
-from app.modules.animals.constants import SPECIES_LABELS
+from app.modules.animals.display_catalog import SPECIES_LABELS
 
 
-def age_label_months(age_months: int) -> str:
-    if age_months < 12:
-        return f"{age_months} мес."
-    years = age_months // 12
-    if years == 1:
-        return "1 год"
-    if 2 <= years <= 4:
-        return f"{years} года"
-    return f"{years} лет"
+def species_label_ru(species: str | None, sex: str | None) -> str:
+    s = (species or "cat").lower()
+    x = (sex or "unknown").lower()
+    if s == "dog":
+        return "Собака"
+    if s == "other":
+        return "Другое"
+    if s == "cat":
+        if x == "male":
+            return "Кот"
+        if x == "female":
+            return "Кошка"
+        return "Кошка"
+    return SPECIES_LABELS.get(s, s)
 
-
-def build_card_tags(species: str, breed: str | None, age_months: int) -> list[str]:
-    kind = SPECIES_LABELS.get(species, species)
-    breed_tag = breed.strip() if breed and breed.strip() else "Метис"
-    return [kind, breed_tag, age_label_months(age_months)]

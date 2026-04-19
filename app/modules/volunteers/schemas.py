@@ -17,10 +17,6 @@ class VolunteerListItem(BaseModel):
     animal_types: list[str] = Field(default_factory=list)
     travel_radius_km: int | None = None
     availability: str | None = None
-    skills: str | None = None
-    experience: str | None = None
-    preferred_help_format: str | None = None
-    animal_categories: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -30,7 +30,10 @@ def list_animals(
     age_group: str | None = Query(default=None, description="baby | adult"),
     features: str | None = Query(
         default=None,
-        description="Через запятую: vaccinated,sterilized,...",
+        description=(
+            "Через запятую id из GET /animals/catalogs → features: urgent, health_issues, "
+            "health_care/<slug>, character/<slug> (либо короткий slug — совпадение в health_care или character)."
+        ),
     ),
     is_urgent: bool | None = Query(default=None),
     min_age_months: int | None = Query(default=None, ge=0),

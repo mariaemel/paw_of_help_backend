@@ -1,9 +1,10 @@
 from sqlalchemy import asc, desc, func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.animal import Animal, AnimalPhoto
+from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.organization import Organization
-from app.modules.animals.constants import FEATURE_FILTERS
+from app.modules.animals.catalog_constants import FEATURE_ID_HEALTH_NOTES, FEATURE_ID_URGENT
 from app.modules.animals.schemas import AnimalFilterParams
 
 
@@ -14,7 +15,11 @@ class AnimalRepository:
     def get_by_id(self, animal_id: int) -> Animal | None:
         return (
             self.db.query(Animal)
-            .options(joinedload(Animal.photos), joinedload(Animal.organization))
+            .options(
+                joinedload(Animal.photos),
+                joinedload(Animal.organization),
+                selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
+            )
             .filter(Animal.id == animal_id)
             .first()
         )
@@ -42,6 +47,41 @@ class AnimalRepository:
         rows = self.db.query(Organization.id, Organization.name).order_by(Organization.name.asc()).all()
         return [(r[0], r[1]) for r in rows]
 
+    def catalog_label_map(self, kind: str) -> dict[str, str]:
+        rows = (
+            self.db.query(AnimalCatalogItem)
+            .filter(AnimalCatalogItem.kind == kind, AnimalCatalogItem.is_active.is_(True))
+            .order_by(AnimalCatalogItem.sort_order.asc(), AnimalCatalogItem.slug.asc())
+            .all()
+        )
+        return {r.slug: r.label for r in rows}
+
+    def list_catalog_options(self, kind: str) -> list[tuple[str, str]]:
+        rows = (
+            self.db.query(AnimalCatalogItem)
+            .filter(AnimalCatalogItem.kind == kind, AnimalCatalogItem.is_active.is_(True))
+            .order_by(AnimalCatalogItem.sort_order.asc(), AnimalCatalogItem.slug.asc())
+            .all()
+        )
+        return [(r.slug, r.label) for r in rows]
+
+    def _catalog_assignment_exists(self, kind: str, slug_lc: str):
+        return (
+            self.db.query(AnimalCatalogAssignment.id)
+            .join(AnimalCatalogItem, AnimalCatalogItem.id == AnimalCatalogAssignment.catalog_item_id)
+            .filter(AnimalCatalogAssignment.animal_id == Animal.id)
+            .filter(AnimalCatalogItem.kind == kind)
+            .filter(func.lower(AnimalCatalogItem.slug) == slug_lc)
+            .exists()
+        )
+
+    @staticmethod
+    def _animal_has_health_notes_sql():
+        return or_(
+            func.trim(func.coalesce(Animal.health_features, "")) != "",
+            func.trim(func.coalesce(Animal.treatment_required, "")) != "",
+        )
+
     def add_photo(self, animal_id: int, file_path: str, is_primary: bool):
         if is_primary:
             self.db.query(AnimalPhoto).filter(AnimalPhoto.animal_id == animal_id).update(
@@ -55,14 +95,17 @@ class AnimalRepository:
         return photo
 
     def list_animals(self, filters: AnimalFilterParams) -> tuple[int, list[Animal]]:
-        query = self.db.query(Animal).options(joinedload(Animal.photos), joinedload(Animal.organization))
+        query = self.db.query(Animal).options(
+            joinedload(Animal.photos),
+            joinedload(Animal.organization),
+            selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
+        )
 
         if filters.q:
             like = f"%{filters.q.lower()}%"
             query = query.filter(
                 or_(
                     func.lower(Animal.name).like(like),
-                    func.lower(Animal.short_story).like(like),
                     func.lower(Animal.full_description).like(like),
                 )
             )
@@ -81,11 +124,24 @@ class AnimalRepository:
         elif filters.age_group == "adult":
             query = query.filter(Animal.age_months >= 12)
 
-        feature_map = {f["id"]: f["field"] for f in FEATURE_FILTERS}
         for fid in filters.features:
-            field = feature_map.get(fid)
-            if field:
-                query = query.filter(getattr(Animal, field).is_(True))
+            token = fid.strip()
+            if not token:
+                continue
+            tl = token.lower()
+            if tl == FEATURE_ID_URGENT:
+                query = query.filter(Animal.is_urgent.is_(True))
+            elif tl == FEATURE_ID_HEALTH_NOTES:
+                query = query.filter(self._animal_has_health_notes_sql())
+            elif "/" in token:
+                kind, slug = token.split("/", 1)
+                kl, sl = kind.strip().lower(), slug.strip().lower()
+                if kl in ("health_care", "character"):
+                    query = query.filter(self._catalog_assignment_exists(kl, sl))
+            else:
+                query = query.filter(
+                    or_(self._catalog_assignment_exists("health_care", tl), self._catalog_assignment_exists("character", tl))
+                )
 
         if filters.is_urgent is not None:
             query = query.filter(Animal.is_urgent == filters.is_urgent)

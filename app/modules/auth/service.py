@@ -109,13 +109,9 @@ class AuthService:
             self.repo.db.add(
                 VolunteerProfile(
                     user_id=user.id,
-                    skills=payload.skills,
-                    experience=payload.experience,
                     availability=payload.availability,
                     location_city=payload.location_city,
                     travel_radius_km=payload.travel_radius_km,
-                    preferred_help_format=payload.preferred_help_format,
-                    animal_categories=payload.animal_categories,
                 )
             )
             email_raw, phone_raw = self._issue_verification_tokens(user.id, phone)

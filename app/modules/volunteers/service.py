@@ -33,19 +33,26 @@ class VolunteerService:
             return None
         return f"{settings.media_url_prefix}/{path}"
 
-    def _competency_tag_pills(self, raw: str | None) -> list[str]:
-        ids = parse_json_list(raw)
+    @staticmethod
+    def _competency_slugs_labels_from_profile(profile) -> tuple[list[str], list[str]]:
+        assigns = list(profile.competency_assignments or [])
+        pairs: list[tuple[int, str, str]] = []
+        for a in assigns:
+            it = a.competency_item
+            if it is None:
+                continue
+            pairs.append((int(it.sort_order or 0), it.slug, it.label))
+        pairs.sort(key=lambda x: (x[0], x[1]))
+        return [p[1] for p in pairs], [p[2] for p in pairs]
+
+    def _competency_tag_pills_from_profile(self, profile) -> list[str]:
+        slugs, _ = self._competency_slugs_labels_from_profile(profile)
         out: list[str] = []
-        for cid in ids:
+        for cid in slugs:
             label = COMPETENCY_SHORT_LABELS.get(cid) or _COMP_FULL.get(cid) or cid
             if label not in out:
                 out.append(label)
         return out[:8]
-
-    def _competency_full_labels(self, raw: str | None) -> tuple[list[str], list[str]]:
-        ids = parse_json_list(raw)
-        labels = [_COMP_FULL.get(i, i) for i in ids]
-        return ids, labels
 
     def _animal_types(self, raw: str | None) -> tuple[list[str], list[str]]:
         ids = parse_json_list(raw)
@@ -55,7 +62,7 @@ class VolunteerService:
         return ids, labels
 
     def _item(self, user, profile) -> VolunteerListItem:
-        _, comp_labels = self._competency_full_labels(profile.competencies_json)
+        _, comp_labels = self._competency_slugs_labels_from_profile(profile)
         animal_ids, animal_labels = self._animal_types(profile.animal_types_json)
         exp_id = profile.experience_level
         return VolunteerListItem(
@@ -68,14 +75,10 @@ class VolunteerService:
             experience_level_label=EXPERIENCE_LEVEL_LABELS.get(exp_id) if exp_id else None,
             completed_tasks_count=int(profile.completed_tasks_count or 0),
             is_available=bool(profile.is_available),
-            competency_tags=self._competency_tag_pills(profile.competencies_json) or comp_labels[:5],
+            competency_tags=self._competency_tag_pills_from_profile(profile) or comp_labels[:5],
             animal_types=animal_labels or (animal_ids if animal_ids else []),
             travel_radius_km=profile.travel_radius_km,
             availability=profile.availability,
-            skills=profile.skills,
-            experience=profile.experience,
-            preferred_help_format=profile.preferred_help_format,
-            animal_categories=profile.animal_categories,
         )
 
     def list_volunteers(self, filters: VolunteerFilterParams) -> VolunteerListResponse:
@@ -85,9 +88,14 @@ class VolunteerService:
 
     def get_catalogs(self) -> VolunteerCatalogsResponse:
         cities = self.repo.list_catalogs()
+        db_items = self.repo.list_competency_catalog()
+        if db_items:
+            competencies = [CatalogOption(id=it.slug, label=it.label) for it in db_items]
+        else:
+            competencies = [CatalogOption(**x) for x in COMPETENCY_OPTIONS]
         return VolunteerCatalogsResponse(
             cities=cities,
-            competencies=[CatalogOption(**x) for x in COMPETENCY_OPTIONS],
+            competencies=competencies,
             experience_levels=[CatalogOption(**x) for x in EXPERIENCE_LEVEL_OPTIONS],
             animal_types=[CatalogOption(**x) for x in ANIMAL_TYPE_FILTER_OPTIONS],
         )
@@ -97,7 +105,7 @@ class VolunteerService:
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Volunteer not found")
         user, profile = row
-        comp_ids, comp_labels = self._competency_full_labels(profile.competencies_json)
+        comp_ids, comp_labels = self._competency_slugs_labels_from_profile(profile)
         animal_ids, animal_labels = self._animal_types(profile.animal_types_json)
         reviews_db = self.repo.list_reviews(volunteer_id)
         reviews = [
@@ -120,7 +128,7 @@ class VolunteerService:
             travel_radius_km=profile.travel_radius_km,
             competencies=comp_ids,
             competency_labels=comp_labels,
-            about_me=profile.about_me or profile.experience,
+            about_me=profile.about_me,
             animal_types=animal_ids,
             animal_type_labels=animal_labels,
             availability=profile.availability,

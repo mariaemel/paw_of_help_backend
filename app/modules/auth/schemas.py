@@ -13,13 +13,9 @@ class RegisterUserRequest(RegisterCredentials):
 
 
 class RegisterVolunteerRequest(RegisterCredentials):
-    skills: str | None = Field(default=None, max_length=5000)
-    experience: str | None = Field(default=None, max_length=5000)
     availability: str | None = Field(default=None, max_length=5000)
     location_city: str | None = Field(default=None, max_length=120)
     travel_radius_km: int | None = Field(default=None, ge=0, le=5000)
-    preferred_help_format: str | None = Field(default=None, max_length=120)
-    animal_categories: str | None = Field(default=None, max_length=5000)
 
 
 class OrganizationContactInput(BaseModel):
