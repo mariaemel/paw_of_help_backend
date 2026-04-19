@@ -19,27 +19,23 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SEED_ANIMAL_IMAGES_DIR = _REPO_ROOT / "seed_images" / "animals"
 
 _DEMO_ANIMAL_PHOTOS: dict[str, list[tuple[str, bool]]] = {
-    "Муся": [
-        ("demo_animals/musya.png", True),
-        ("demo_animals/musya_2.png", False),
-    ],
-    "Боня": [
-        ("demo_animals/bonya.png", True),
-    ],
-    "Ричи": [
-        ("demo_animals/richi.png", True),
-        ("demo_animals/richi_2.png", False),
-    ],
+    "Муся": [("demo_animals/musya.png", True)],
+    "Маруся": [("demo_animals/marusya.png", True)],
+    "Боня": [("demo_animals/bonya.png", True)],
+    "Ричи": [("demo_animals/richi.png", True)],
+    "Грей": [("demo_animals/grey.png", True)],
 }
 
 
 def _materialize_seed_animal_images() -> bool:
-    if not (_SEED_ANIMAL_IMAGES_DIR / "musya.png").is_file():
-        return False
+    required = ("musya.png", "marusya.png", "bonya.png", "richi.png", "grey.png")
+    for name in required:
+        if not (_SEED_ANIMAL_IMAGES_DIR / name).is_file():
+            return False
     dest = Path(settings.media_dir) / "demo_animals"
     dest.mkdir(parents=True, exist_ok=True)
-    for png in sorted(_SEED_ANIMAL_IMAGES_DIR.glob("*.png")):
-        shutil.copy2(png, dest / png.name)
+    for name in required:
+        shutil.copy2(_SEED_ANIMAL_IMAGES_DIR / name, dest / name)
     return True
 
 
@@ -154,6 +150,29 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         ),
     ),
     DemoAnimalSeed(
+        name="Маруся",
+        use_second_org=False,
+        species=AnimalSpecies.CAT.value,
+        breed="Метис",
+        sex="female",
+        age_months=36,
+        full_description="Маруся — спокойная и внимательная кошка, любит общение и спокойную обстановку.",
+        health_features=None,
+        treatment_required=None,
+        location_city="Москва",
+        is_urgent=False,
+        urgent_needs_text=None,
+        status=AnimalStatus.LOOKING_FOR_HOME.value,
+        help_options="Корм, передержка на время отпуска хозяина.",
+        catalog_keys=(
+            ("health_care", "vaccinated"),
+            ("health_care", "sterilized"),
+            ("character", "calm"),
+            ("character", "affectionate"),
+            ("character", "contact"),
+        ),
+    ),
+    DemoAnimalSeed(
         name="Боня",
         use_second_org=True,
         species=AnimalSpecies.DOG.value,
@@ -192,6 +211,29 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         status=AnimalStatus.ON_TREATMENT.value,
         help_options="Оплата лечения, передержка, автопомощь.",
         catalog_keys=(
+            ("character", "active"),
+            ("character", "contact"),
+        ),
+    ),
+    DemoAnimalSeed(
+        name="Грей",
+        use_second_org=True,
+        species=AnimalSpecies.DOG.value,
+        breed="Метис",
+        sex="male",
+        age_months=30,
+        full_description="Грей активный и дружелюбный, хорошо переносит прогулки и контакт с людьми.",
+        health_features=None,
+        treatment_required=None,
+        location_city="Санкт-Петербург",
+        is_urgent=False,
+        urgent_needs_text=None,
+        status=AnimalStatus.LOOKING_FOR_HOME.value,
+        help_options="Прогулки, корм, автопомощь на выставки.",
+        catalog_keys=(
+            ("health_care", "vaccinated"),
+            ("health_care", "sterilized"),
+            ("character", "friendly"),
             ("character", "active"),
             ("character", "contact"),
         ),
