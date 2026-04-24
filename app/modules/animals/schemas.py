@@ -10,10 +10,20 @@ class OrganizationBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AnimalLinkedRequestShort(BaseModel):
+    id: int
+    title: str
+    status: str
+    is_urgent: bool
+    help_type: str
+    volunteer_needed: bool
+    deadline_at: datetime | None = None
+
+
 class AnimalListItem(BaseModel):
     id: int
     name: str
-    species: str = Field(description="Вид на русском: Собака / Кот / Кошка / Другое (по полу для кошек)")
+    species: str = Field(description="Вид на русском: Пес / Собака / Кот / Кошка / Другое")
     sex: str
     age_months: int
     location_city: str | None = None
@@ -38,7 +48,7 @@ class AnimalListItem(BaseModel):
 class AnimalDetail(BaseModel):
     id: int
     name: str
-    species: str = Field(description="Вид на русском: Собака / Кот / Кошка / Другое")
+    species: str = Field(description="Вид на русском: Пес / Собака / Кот / Кошка / Другое")
     breed: str | None = None
     sex: str
     age_months: int
@@ -61,6 +71,7 @@ class AnimalDetail(BaseModel):
     )
     help_options: str | None = None
     urgent_needs_text: str | None = None
+    linked_help_requests: list["AnimalLinkedRequestShort"] = Field(default_factory=list)
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

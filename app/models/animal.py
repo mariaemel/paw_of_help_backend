@@ -11,6 +11,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.animal_catalog import AnimalCatalogAssignment
+    from app.models.help_request import HelpRequest
     from app.models.organization import Organization
 
 
@@ -71,6 +72,7 @@ class Animal(Base):
         back_populates="animal",
         cascade="all, delete-orphan",
     )
+    help_requests: Mapped[list["HelpRequest"]] = relationship("HelpRequest", back_populates="animal")
     organization: Mapped[Organization | None] = relationship("Organization", back_populates="animals")
 
 

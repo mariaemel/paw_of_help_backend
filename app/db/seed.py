@@ -1,7 +1,7 @@
 import json
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.animal import Animal, AnimalPhoto, AnimalSpecies, AnimalStatus
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
+from app.models.event import Event
+from app.models.help_request import HelpRequest
+from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
 from app.models.profile import VolunteerProfile, VolunteerReview
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
@@ -17,6 +20,7 @@ from app.modules.volunteers.constants import COMPETENCY_OPTIONS
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SEED_ANIMAL_IMAGES_DIR = _REPO_ROOT / "seed_images" / "animals"
+_SEED_URGENT_IMAGES_DIR = _REPO_ROOT / "seed_images" / "urgent"
 
 _DEMO_ANIMAL_PHOTOS: dict[str, list[tuple[str, bool]]] = {
     "Муся": [("demo_animals/musya.png", True)],
@@ -36,6 +40,18 @@ def _materialize_seed_animal_images() -> bool:
     dest.mkdir(parents=True, exist_ok=True)
     for name in required:
         shutil.copy2(_SEED_ANIMAL_IMAGES_DIR / name, dest / name)
+    return True
+
+
+def _materialize_seed_urgent_images() -> bool:
+    required = ("kittens_basement.png",)
+    for name in required:
+        if not (_SEED_URGENT_IMAGES_DIR / name).is_file():
+            return False
+    dest = Path(settings.media_dir) / "demo_urgent"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in required:
+        shutil.copy2(_SEED_URGENT_IMAGES_DIR / name, dest / name)
     return True
 
 
@@ -309,6 +325,204 @@ def ensure_demo_animals(db: Session, org1: Organization, org2: Organization) -> 
         _sync_demo_animal_photos(db, animal, photos_ready)
 
 
+def ensure_demo_knowledge_articles(db: Session, volunteer_user_id: int, organization_user_id: int) -> None:
+    rows: list[tuple[str, str, str, int, bool, int, str]] = [
+        (
+            "Как кормить кошку в период адаптации",
+            "Рацион, режим и объём порций для кошки в первые недели в новом доме.",
+            "care",
+            5,
+            False,
+            organization_user_id,
+            "organization",
+        ),
+        (
+            "Первая помощь при небольшом порезе лапы",
+            "Что делать до визита к ветеринару и когда нужно срочно ехать в клинику.",
+            "first_aid",
+            7,
+            True,
+            volunteer_user_id,
+            "volunteer",
+        ),
+        (
+            "Юридические вопросы при пристройстве",
+            "Какие документы подготовить и как корректно оформить передачу животного.",
+            "legal",
+            9,
+            False,
+            organization_user_id,
+            "organization",
+        ),
+    ]
+    for title, summary, category, read_minutes, is_tip, uid, role in rows:
+        article = db.query(KnowledgeArticle).filter(KnowledgeArticle.title == title).first()
+        if article is None:
+            article = KnowledgeArticle(
+                author_user_id=uid,
+                owner_role=role,
+                title=title,
+                summary=summary,
+                content=summary + " Подробное содержание статьи доступно в детальной карточке.",
+                category=category,
+                read_minutes=read_minutes,
+                is_context_tip=is_tip,
+                is_published=True,
+                is_archived=False,
+            )
+            db.add(article)
+        else:
+            article.summary = summary
+            article.category = category
+            article.read_minutes = read_minutes
+            article.is_context_tip = is_tip
+            article.is_published = True
+            article.is_archived = False
+
+
+def ensure_demo_events(db: Session, org1: Organization, org2: Organization) -> None:
+    starts = datetime(2026, 5, 3, 11, 0, 0)
+    rows = [
+        {
+            "title": "Выставка питомцев «Найди друга»",
+            "organization_id": org2.id,
+            "summary": "Приходите познакомиться с подопечными и выбрать друга.",
+            "description": (
+                "Приходите познакомиться с нашими подопечными. Более 30 кошек и собак ищут дом. "
+                "Специалисты расскажут, как правильно выбрать питомца и подготовить дом к его появлению."
+            ),
+            "city": "Екатеринбург",
+            "address": "ул. Ленина, 52, ТЦ «Мегаполис», атриум",
+            "format": "offline",
+            "help_type": "adoption",
+            "starts_at": starts,
+            "ends_at": starts + timedelta(hours=6),
+            "latitude": 56.8389,
+            "longitude": 60.6057,
+        },
+        {
+            "title": "Субботник в приюте «Теплые лапы»",
+            "organization_id": org2.id,
+            "summary": "Нужна помощь руками: уборка вольеров и сортировка кормов.",
+            "description": "Открытый день помощи приюту: уборка, мелкий ремонт, сортировка гуманитарной помощи.",
+            "city": "Санкт-Петербург",
+            "address": "пр. Заботы, 5",
+            "format": "offline",
+            "help_type": "cleanup",
+            "starts_at": starts + timedelta(days=7),
+            "ends_at": starts + timedelta(days=7, hours=4),
+            "latitude": 59.9343,
+            "longitude": 30.3351,
+        },
+        {
+            "title": "Онлайн-лекция: первая помощь животным",
+            "organization_id": org1.id,
+            "summary": "Практическая лекция для новичков и волонтёров.",
+            "description": "Разберем типовые неотложные ситуации, как действовать до приезда в клинику.",
+            "city": "Онлайн",
+            "address": "Видеоконференция",
+            "format": "online",
+            "help_type": "education",
+            "starts_at": starts + timedelta(days=3),
+            "ends_at": starts + timedelta(days=3, hours=2),
+            "latitude": None,
+            "longitude": None,
+        },
+    ]
+    for spec in rows:
+        item = db.query(Event).filter(Event.title == spec["title"]).first()
+        if item is None:
+            item = Event(
+                is_published=True,
+                is_archived=False,
+                **spec,
+            )
+            db.add(item)
+            continue
+        for key, value in spec.items():
+            setattr(item, key, value)
+        item.is_published = True
+        item.is_archived = False
+
+
+def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organization) -> None:
+    urgent_photos_ready = _materialize_seed_urgent_images()
+    musya = db.query(Animal).filter(Animal.name == "Муся").first()
+    richi = db.query(Animal).filter(Animal.name == "Ричи").first()
+    rows = [
+        {
+            "organization_id": org2.id,
+            "animal_id": musya.id if musya and musya.organization_id == org2.id else None,
+            "title": "Кот Пушок",
+            "description": "Попал под машину. Нужна срочная операция на лапе и стационар.",
+            "city": "Москва",
+            "address": "Ветеринарная клиника, ул. Садовая, 12",
+            "help_type": "financial",
+            "is_urgent": True,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 15000.0,
+            "collected_amount": 5000.0,
+            "deadline_at": datetime(2026, 5, 3, 23, 0, 0),
+            "deadline_note": None,
+            "media_path": "demo_animals/musya.png",
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org1.id,
+            "animal_id": richi.id if richi and richi.organization_id == org1.id else None,
+            "title": "Пёс Рекс",
+            "description": "Нужно отвезти крупную собаку из приюта в клинику на рентген.",
+            "city": "Москва",
+            "address": "ул. Белинского, 7",
+            "help_type": "auto",
+            "is_urgent": True,
+            "volunteer_needed": True,
+            "volunteer_requirements": "Нужен водитель с опытом перевозки животных.",
+            "volunteer_competencies_json": json.dumps(["auto", "medical"], ensure_ascii=False),
+            "target_amount": None,
+            "collected_amount": 0.0,
+            "deadline_at": datetime(2026, 5, 2, 15, 0, 0),
+            "deadline_note": None,
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org2.id,
+            "animal_id": None,
+            "title": "Котята из подвала",
+            "description": "У пятерых котят энтерит. Срочно нужен антибиотик и лечебный паштет.",
+            "city": "Санкт-Петербург",
+            "address": "Московский проспект, 80",
+            "help_type": "medical",
+            "is_urgent": True,
+            "volunteer_needed": True,
+            "volunteer_requirements": "Желателен опыт передержки и ухода за котятами.",
+            "volunteer_competencies_json": json.dumps(["foster", "medical"], ensure_ascii=False),
+            "target_amount": None,
+            "collected_amount": 0.0,
+            "deadline_at": datetime(2026, 5, 2, 10, 0, 0),
+            "deadline_note": "Забрать нужно сегодня или завтра утром",
+            "media_path": "demo_urgent/kittens_basement.png" if urgent_photos_ready else None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+    ]
+    for spec in rows:
+        item = db.query(HelpRequest).filter(HelpRequest.title == spec["title"]).first()
+        if item is None:
+            db.add(HelpRequest(**spec))
+            continue
+        for key, value in spec.items():
+            setattr(item, key, value)
+
+
 def seed_demo_data_if_empty(db: Session) -> None:
     orgs = db.query(Organization).order_by(Organization.id.asc()).all()
     if len(orgs) < 2:
@@ -346,6 +560,35 @@ def seed_demo_data_if_empty(db: Session) -> None:
     ensure_animal_catalog_items(db)
     ensure_volunteer_competency_items(db)
     ensure_demo_animals(db, org1, org2)
+
+    org_user_1 = db.query(User).filter(User.email == "org1@example.com").first()
+    if org_user_1 is None:
+        org_user_1 = User(
+            email="org1@example.com",
+            phone="+79990000003",
+            password_hash="seed-password-hash",
+            full_name="Благотворительный фонд «Верный друг»",
+            role=UserRole.ORGANIZATION,
+            is_email_verified=True,
+        )
+        db.add(org_user_1)
+        db.flush()
+    org_user_2 = db.query(User).filter(User.email == "org2@example.com").first()
+    if org_user_2 is None:
+        org_user_2 = User(
+            email="org2@example.com",
+            phone="+79990000004",
+            password_hash="seed-password-hash",
+            full_name="Приют «Теплые лапы»",
+            role=UserRole.ORGANIZATION,
+            is_email_verified=True,
+        )
+        db.add(org_user_2)
+        db.flush()
+    if org1.owner_user_id is None:
+        org1.owner_user_id = org_user_1.id
+    if org2.owner_user_id is None:
+        org2.owner_user_id = org_user_2.id
 
     if not db.query(VolunteerProfile.id).first():
         v1 = User(
@@ -416,6 +659,13 @@ def seed_demo_data_if_empty(db: Session) -> None:
                 text="Анна оперативно помогла с транспортом и сделала отличные фото для соцсетей.",
             )
         )
+
+    volunteer_user = db.query(User).filter(User.role == UserRole.VOLUNTEER).order_by(User.id.asc()).first()
+    organization_user = db.query(User).filter(User.role == UserRole.ORGANIZATION).order_by(User.id.asc()).first()
+    if volunteer_user and organization_user:
+        ensure_demo_knowledge_articles(db, volunteer_user.id, organization_user.id)
+    ensure_demo_events(db, org1, org2)
+    ensure_demo_urgent_requests(db, org1, org2)
 
     enrich_demo_volunteers(db)
 

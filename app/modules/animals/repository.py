@@ -18,6 +18,7 @@ class AnimalRepository:
             .options(
                 joinedload(Animal.photos),
                 joinedload(Animal.organization),
+                selectinload(Animal.help_requests),
                 selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
             )
             .filter(Animal.id == animal_id)

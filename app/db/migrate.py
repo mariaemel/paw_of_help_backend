@@ -250,6 +250,7 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     """
                     CREATE TABLE organizations (
                         id INTEGER NOT NULL,
+                        owner_user_id INTEGER,
                         name VARCHAR(255) NOT NULL,
                         city VARCHAR(120),
                         address VARCHAR(500),
@@ -261,14 +262,143 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         adopted_yearly_count INTEGER NOT NULL,
                         description TEXT,
                         created_at DATETIME,
-                        PRIMARY KEY (id)
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(owner_user_id) REFERENCES users (id)
                     )
                     """
                 )
             )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_organizations_owner_user_id ON organizations (owner_user_id)")
+            )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_name ON organizations (name)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_city ON organizations (city)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_organizations_specialization ON organizations (specialization)"))
+        else:
+            org_cols = _table_columns(conn, "organizations")
+            if "owner_user_id" not in org_cols:
+                conn.execute(text("ALTER TABLE organizations ADD COLUMN owner_user_id INTEGER"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_organizations_owner_user_id ON organizations (owner_user_id)")
+            )
+
+        if not _has_table(conn, "knowledge_articles"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE knowledge_articles (
+                        id INTEGER NOT NULL,
+                        author_user_id INTEGER,
+                        owner_role VARCHAR(20) NOT NULL,
+                        title VARCHAR(255) NOT NULL,
+                        summary VARCHAR(500),
+                        content TEXT NOT NULL,
+                        category VARCHAR(40) NOT NULL,
+                        read_minutes INTEGER NOT NULL,
+                        is_context_tip BOOLEAN NOT NULL,
+                        is_published BOOLEAN NOT NULL,
+                        is_archived BOOLEAN NOT NULL,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(author_user_id) REFERENCES users (id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_knowledge_articles_category "
+                    "ON knowledge_articles (category)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_knowledge_articles_is_context_tip "
+                    "ON knowledge_articles (is_context_tip)"
+                )
+            )
+
+        if not _has_table(conn, "events"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE events (
+                        id INTEGER NOT NULL,
+                        organization_id INTEGER,
+                        title VARCHAR(255) NOT NULL,
+                        summary VARCHAR(500),
+                        description TEXT NOT NULL,
+                        city VARCHAR(120),
+                        address VARCHAR(500),
+                        format VARCHAR(20) NOT NULL,
+                        help_type VARCHAR(40),
+                        starts_at DATETIME NOT NULL,
+                        ends_at DATETIME,
+                        latitude FLOAT,
+                        longitude FLOAT,
+                        is_published BOOLEAN NOT NULL,
+                        is_archived BOOLEAN NOT NULL,
+                        created_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(organization_id) REFERENCES organizations (id)
+                    )
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_city ON events (city)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_format ON events (format)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_help_type ON events (help_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_starts_at ON events (starts_at)"))
+
+        if not _has_table(conn, "help_requests"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE help_requests (
+                        id INTEGER NOT NULL,
+                        organization_id INTEGER NOT NULL,
+                        animal_id INTEGER,
+                        title VARCHAR(255) NOT NULL,
+                        description TEXT NOT NULL,
+                        city VARCHAR(120),
+                        address VARCHAR(500),
+                        latitude FLOAT,
+                        longitude FLOAT,
+                        help_type VARCHAR(40) NOT NULL,
+                        is_urgent BOOLEAN NOT NULL,
+                        volunteer_needed BOOLEAN NOT NULL,
+                        volunteer_requirements TEXT,
+                        volunteer_competencies_json TEXT,
+                        target_amount FLOAT,
+                        collected_amount FLOAT NOT NULL,
+                        deadline_at DATETIME,
+                        deadline_note VARCHAR(255),
+                        media_path VARCHAR(500),
+                        status VARCHAR(20) NOT NULL,
+                        is_published BOOLEAN NOT NULL,
+                        is_archived BOOLEAN NOT NULL,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(organization_id) REFERENCES organizations (id),
+                        FOREIGN KEY(animal_id) REFERENCES animals (id)
+                    )
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_organization_id ON help_requests (organization_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_animal_id ON help_requests (animal_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_city ON help_requests (city)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_help_type ON help_requests (help_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_status ON help_requests (status)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_is_urgent ON help_requests (is_urgent)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_deadline_at ON help_requests (deadline_at)"))
+        else:
+            _drop_sqlite_columns_if_exist(conn, "help_requests", ["urgency_level"])
+            hr_cols = _table_columns(conn, "help_requests")
+            if "deadline_note" not in hr_cols:
+                conn.execute(text("ALTER TABLE help_requests ADD COLUMN deadline_note VARCHAR(255)"))
 
         if _has_table(conn, "animals"):
             ac = _table_columns(conn, "animals")

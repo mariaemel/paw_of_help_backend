@@ -1,5 +1,8 @@
 from app.models.animal import Animal, AnimalPhoto
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
+from app.models.event import Event
+from app.models.help_request import HelpRequest
+from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.models.profile import (
@@ -19,6 +22,9 @@ __all__ = [
     "AnimalPhoto",
     "AnimalCatalogItem",
     "AnimalCatalogAssignment",
+    "HelpRequest",
+    "KnowledgeArticle",
+    "Event",
     "Organization",
     "UserProfile",
     "VolunteerProfile",

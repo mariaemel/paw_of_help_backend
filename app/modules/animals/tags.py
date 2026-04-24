@@ -5,6 +5,10 @@ def species_label_ru(species: str | None, sex: str | None) -> str:
     s = (species or "cat").lower()
     x = (sex or "unknown").lower()
     if s == "dog":
+        if x == "male":
+            return "Пес"
+        if x == "female":
+            return "Собака"
         return "Собака"
     if s == "other":
         return "Другое"

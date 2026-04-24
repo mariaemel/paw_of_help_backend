@@ -14,6 +14,7 @@ from app.modules.animals.schemas import (
     AnimalDetail,
     AnimalFilterParams,
     AnimalListResponse,
+    AnimalLinkedRequestShort,
     CatalogTagOption,
     FeatureFilterOption,
     OrganizationBrief,
@@ -128,6 +129,19 @@ class AnimalService:
             character_tags=char_tags,
             help_options=animal.help_options,
             urgent_needs_text=getattr(animal, "urgent_needs_text", None),
+            linked_help_requests=[
+                AnimalLinkedRequestShort(
+                    id=r.id,
+                    title=r.title,
+                    status=r.status,
+                    is_urgent=bool(r.is_urgent),
+                    help_type=r.help_type,
+                    volunteer_needed=bool(r.volunteer_needed),
+                    deadline_at=r.deadline_at,
+                )
+                for r in (animal.help_requests or [])
+                if not r.is_archived and r.is_published
+            ],
             created_at=animal.created_at,
         )
 

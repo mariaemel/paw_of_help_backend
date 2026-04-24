@@ -176,6 +176,7 @@ class AuthService:
                 org_spec = "both"
             self.repo.db.add(
                 Organization(
+                    owner_user_id=user.id,
                     name=payload.display_name,
                     city=payload.work_territory,
                     specialization=org_spec,
