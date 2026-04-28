@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./paw_of_help.db"
     media_dir: str = "media"
     media_url_prefix: str = "/media"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     seed_demo_data: bool = True
     verification_token_expire_hours: int = 24
 

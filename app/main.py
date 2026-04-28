@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -21,6 +22,15 @@ from app import models
 
 app = FastAPI(title=settings.app_name)
 Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
+
+_cors_origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
