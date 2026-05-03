@@ -3,7 +3,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_roles
 from app.db.session import get_db
+from app.models.user import User, UserRole
 from app.modules.events.repository import EventRepository
 from app.modules.events.schemas import (
     EventCatalogsResponse,
@@ -71,35 +73,38 @@ def event_detail(event_id: int, service: EventService = Depends(get_event_servic
 
 
 @router.post("", response_model=EventDetail)
-def create_event(payload: EventCreateRequest, service: EventService = Depends(get_event_service)):
-    return service.create_event(payload)
+def create_event(
+    payload: EventCreateRequest,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
+    service: EventService = Depends(get_event_service),
+):
+    return service.create_event(user, payload)
 
 
 @router.patch("/{event_id}", response_model=EventDetail)
 def update_event(
     event_id: int,
     payload: EventUpdateRequest,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: EventService = Depends(get_event_service),
 ):
-    return service.update_event(event_id, payload)
+    return service.update_event(event_id, user, payload)
 
 
 @router.post("/{event_id}/archive", response_model=EventDetail)
 def archive_event(
     event_id: int,
-    actor_user_id: int = Query(...),
-    actor_role: str = Query(..., description="organization"),
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: EventService = Depends(get_event_service),
 ):
-    return service.archive_event(event_id, actor_user_id, actor_role)
+    return service.archive_event(event_id, user)
 
 
 @router.delete("/{event_id}")
 def delete_event(
     event_id: int,
-    actor_user_id: int = Query(...),
-    actor_role: str = Query(..., description="organization"),
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: EventService = Depends(get_event_service),
 ):
-    service.delete_event(event_id, actor_user_id, actor_role)
+    service.delete_event(event_id, user)
     return {"ok": True}

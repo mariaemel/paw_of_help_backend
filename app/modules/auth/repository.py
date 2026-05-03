@@ -24,6 +24,7 @@ class AuthRepository:
         password_hash: str,
         full_name: str | None,
         role: UserRole,
+        personal_data_consent_at: datetime | None = None,
     ) -> User:
         user = User(
             email=email,
@@ -31,6 +32,7 @@ class AuthRepository:
             password_hash=password_hash,
             full_name=full_name,
             role=role,
+            personal_data_consent_at=personal_data_consent_at,
         )
         self.db.add(user)
         self.db.flush()

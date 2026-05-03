@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 from app.models.help_request import HelpRequest
 from app.models.organization import Organization
+from app.models.user import User, UserRole
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.schemas import (
     HELP_TYPE_OPTIONS,
@@ -26,17 +27,18 @@ class UrgentService:
     def __init__(self, repo: UrgentRepository):
         self.repo = repo
 
-    @staticmethod
-    def _ensure_org_actor(role: str) -> None:
-        if (role or "").strip().lower() != "organization":
+    def _organization_for_user(self, user: User) -> Organization:
+        if user.role != UserRole.ORGANIZATION:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
-
-    @staticmethod
-    def _ensure_organization_owner(org: Organization | None, actor_user_id: int) -> None:
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
         if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        if org.owner_user_id != actor_user_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
+        return org
 
     @staticmethod
     def _deadline_label(deadline_at: datetime | None, deadline_note: str | None) -> str | None:
@@ -81,7 +83,6 @@ class UrgentService:
             deadline_label=self._deadline_label(req.deadline_at, req.deadline_note),
             status=req.status,
             target_amount=req.target_amount,
-            collected_amount=req.collected_amount,
             primary_photo_url=self._primary_photo_url(req),
             badges=badges,
         )
@@ -131,21 +132,19 @@ class UrgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
         return self._to_detail(req)
 
-    def create_request(self, payload: UrgentRequestCreate) -> UrgentRequestDetail:
-        self._ensure_org_actor(payload.actor_role)
-        org = self.repo.get_organization(payload.organization_id)
-        self._ensure_organization_owner(org, payload.actor_user_id)
+    def create_request(self, user: User, payload: UrgentRequestCreate) -> UrgentRequestDetail:
+        org = self._organization_for_user(user)
         if payload.animal_id is not None:
             animal = self.repo.get_animal(payload.animal_id)
             if animal is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
-            if animal.organization_id != payload.organization_id:
+            if animal.organization_id != org.id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Animal must belong to same organization",
                 )
         req = HelpRequest(
-            organization_id=payload.organization_id,
+            organization_id=org.id,
             animal_id=payload.animal_id,
             title=payload.title,
             description=payload.description,
@@ -159,7 +158,6 @@ class UrgentService:
             volunteer_requirements=payload.volunteer_requirements,
             volunteer_competencies_json=json.dumps(payload.volunteer_competencies, ensure_ascii=False),
             target_amount=payload.target_amount,
-            collected_amount=payload.collected_amount,
             deadline_at=payload.deadline_at,
             deadline_note=payload.deadline_note,
             media_path=payload.media_path,
@@ -171,12 +169,13 @@ class UrgentService:
         self.repo.db.commit()
         return self.get_detail(req.id)
 
-    def update_request(self, request_id: int, payload: UrgentRequestUpdate) -> UrgentRequestDetail:
-        self._ensure_org_actor(payload.actor_role)
+    def update_request(self, request_id: int, user: User, payload: UrgentRequestUpdate) -> UrgentRequestDetail:
+        org = self._organization_for_user(user)
         req = self.repo.get_request_for_owner(request_id)
         if req is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
-        self._ensure_organization_owner(req.organization, payload.actor_user_id)
+        if req.organization_id != org.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
         if payload.animal_id is not None:
             animal = self.repo.get_animal(payload.animal_id)
             if animal is None:
@@ -200,7 +199,6 @@ class UrgentService:
             "volunteer_needed",
             "volunteer_requirements",
             "target_amount",
-            "collected_amount",
             "deadline_at",
             "deadline_note",
             "media_path",
@@ -215,12 +213,13 @@ class UrgentService:
         self.repo.db.commit()
         return self.get_detail(req.id)
 
-    def close_request(self, request_id: int, actor_user_id: int, actor_role: str) -> UrgentRequestDetail:
-        self._ensure_org_actor(actor_role)
+    def close_request(self, request_id: int, user: User) -> UrgentRequestDetail:
+        org = self._organization_for_user(user)
         req = self.repo.get_request_for_owner(request_id)
         if req is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
-        self._ensure_organization_owner(req.organization, actor_user_id)
+        if req.organization_id != org.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
         req.status = "closed"
         self.repo.db.commit()
         self.repo.db.refresh(req)

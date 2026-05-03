@@ -4,6 +4,7 @@ import re
 from fastapi import HTTPException, status
 
 from app.models.knowledge import KnowledgeArticle
+from app.models.user import User, UserRole
 from app.modules.knowledge.repository import KnowledgeRepository
 from app.modules.knowledge.schemas import (
     KB_CATEGORY_OPTIONS,
@@ -18,7 +19,6 @@ from app.modules.knowledge.schemas import (
 )
 
 _CATEGORY_LABELS = {x["id"]: x["label"] for x in KB_CATEGORY_OPTIONS}
-_ALLOWED_OWNER_ROLES = {"volunteer", "organization"}
 _AVERAGE_READING_WPM = 180
 _WORD_RE = re.compile(r"\b[\w'-]+\b", flags=re.UNICODE)
 
@@ -28,15 +28,16 @@ class KnowledgeService:
         self.repo = repo
 
     @staticmethod
-    def _ensure_owner_role(role: str) -> str:
-        value = (role or "").strip().lower()
-        if value not in _ALLOWED_OWNER_ROLES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid owner role")
-        return value
+    def _ensure_writer(user: User) -> None:
+        if user.role not in (UserRole.VOLUNTEER, UserRole.ORGANIZATION):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Volunteer or organization role required to manage knowledge base",
+            )
 
     @staticmethod
-    def _ensure_can_edit(article: KnowledgeArticle, actor_user_id: int, actor_role: str) -> None:
-        if article.author_user_id != actor_user_id or article.owner_role != actor_role:
+    def _ensure_can_edit(article: KnowledgeArticle, user: User) -> None:
+        if article.author_user_id != user.id or article.owner_role != user.role.value:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only edit own article")
 
     @staticmethod
@@ -90,11 +91,11 @@ class KnowledgeService:
             updated_at=row.updated_at,
         )
 
-    def create_article(self, payload: KnowledgeUpsertRequest) -> KnowledgeDetail:
-        role = self._ensure_owner_role(payload.actor_role)
+    def create_article(self, user: User, payload: KnowledgeUpsertRequest) -> KnowledgeDetail:
+        self._ensure_writer(user)
         art = KnowledgeArticle(
-            author_user_id=payload.actor_user_id,
-            owner_role=role,
+            author_user_id=user.id,
+            owner_role=user.role.value,
             title=payload.title,
             summary=payload.summary,
             content=payload.content,
@@ -109,12 +110,12 @@ class KnowledgeService:
         self.repo.db.refresh(art)
         return self.get_detail(art.id)
 
-    def update_article(self, article_id: int, payload: KnowledgeUpdateRequest) -> KnowledgeDetail:
-        role = self._ensure_owner_role(payload.actor_role)
+    def update_article(self, article_id: int, user: User, payload: KnowledgeUpdateRequest) -> KnowledgeDetail:
+        self._ensure_writer(user)
         art = self.repo.get_article_for_owner(article_id)
         if not art:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-        self._ensure_can_edit(art, payload.actor_user_id, role)
+        self._ensure_can_edit(art, user)
 
         for field in (
             "title",
@@ -146,21 +147,21 @@ class KnowledgeService:
             updated_at=art.updated_at,
         )
 
-    def delete_article(self, article_id: int, actor_user_id: int, actor_role: str) -> None:
-        role = self._ensure_owner_role(actor_role)
+    def delete_article(self, article_id: int, user: User) -> None:
+        self._ensure_writer(user)
         art = self.repo.get_article_for_owner(article_id)
         if not art:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-        self._ensure_can_edit(art, actor_user_id, role)
+        self._ensure_can_edit(art, user)
         self.repo.db.delete(art)
         self.repo.db.commit()
 
-    def archive_article(self, article_id: int, actor_user_id: int, actor_role: str) -> KnowledgeDetail:
-        role = self._ensure_owner_role(actor_role)
+    def archive_article(self, article_id: int, user: User) -> KnowledgeDetail:
+        self._ensure_writer(user)
         art = self.repo.get_article_for_owner(article_id)
         if not art:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-        self._ensure_can_edit(art, actor_user_id, role)
+        self._ensure_can_edit(art, user)
         art.is_archived = True
         self.repo.db.commit()
         self.repo.db.refresh(art)

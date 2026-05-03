@@ -23,6 +23,7 @@ class UserProfile(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship("User", back_populates="user_profile")
@@ -37,15 +38,22 @@ class VolunteerProfile(Base):
     about_me: Mapped[str | None] = mapped_column(Text, nullable=True)
     availability: Mapped[str | None] = mapped_column(Text, nullable=True)
     location_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    location_district: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    help_format: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    has_veterinary_education: Mapped[bool] = mapped_column(Boolean, default=False)
+    weekly_availability_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accepts_night_urgency: Mapped[bool] = mapped_column(Boolean, default=False)
+    travel_area_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     travel_radius_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
     animal_types_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     experience_level: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     avatar_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    rating: Mapped[float] = mapped_column(Float, default=0.0, index=True)
     completed_tasks_count: Mapped[int] = mapped_column(Integer, default=0)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    has_own_transport: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_travel_other_area: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -54,23 +62,6 @@ class VolunteerProfile(Base):
         "VolunteerCompetencyAssignment",
         back_populates="volunteer_profile",
         cascade="all, delete-orphan",
-    )
-
-
-class VolunteerReview(Base):
-    __tablename__ = "volunteer_reviews"
-
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    volunteer_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    author_name: Mapped[str] = mapped_column(String(255))
-    author_avatar_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    review_date: Mapped[datetime] = mapped_column(DateTime, index=True)
-    rating: Mapped[int] = mapped_column(Integer)
-    text: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    volunteer: Mapped["User"] = relationship(
-        "User", foreign_keys=[volunteer_user_id], back_populates="volunteer_reviews_received"
     )
 
 

@@ -22,25 +22,29 @@ def hash_raw_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def create_token(subject: str, expires_delta: timedelta, token_type: str) -> str:
+def create_token(subject: str, expires_delta: timedelta, token_type: str, role: str | None = None) -> str:
     expire = datetime.now(timezone.utc) + expires_delta
     payload = {"sub": subject, "exp": expire, "type": token_type}
+    if role is not None:
+        payload["role"] = role
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, role: str | None = None) -> str:
     return create_token(
         subject=subject,
         expires_delta=timedelta(minutes=settings.access_token_expire_minutes),
         token_type="access",
+        role=role,
     )
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, role: str | None = None) -> str:
     return create_token(
         subject=subject,
         expires_delta=timedelta(days=settings.refresh_token_expire_days),
         token_type="refresh",
+        role=role,
     )
 
 

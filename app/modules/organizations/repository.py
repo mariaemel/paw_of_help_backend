@@ -2,8 +2,14 @@ import json
 import math
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.models.animal import Animal
+from app.models.event import Event
+from app.models.help_request import HelpRequest
+from app.models.knowledge import KnowledgeArticle
+from app.models.organization_home_story import OrganizationHomeStory
+from app.models.organization_report import OrganizationReport
 from app.models.organization import Organization
 from app.modules.organizations.schemas import OrganizationFilterParams
 
@@ -40,6 +46,7 @@ class OrganizationRepository:
             {"id": "financial", "label": "Финансовая помощь"},
             {"id": "items", "label": "Помощь вещами / кормом"},
             {"id": "auto", "label": "Автопомощь"},
+            {"id": "fundraising", "label": "Сбор"},
         ]
         return cities, specs, needs_opts
 
@@ -49,7 +56,11 @@ class OrganizationRepository:
         if filters.q:
             like = f"%{filters.q.lower()}%"
             q = q.filter(
-                or_(func.lower(Organization.name).like(like), func.lower(Organization.description).like(like))
+                or_(
+                    func.lower(Organization.name).like(like),
+                    func.lower(Organization.description).like(like),
+                    func.lower(func.coalesce(Organization.tagline, "")).like(like),
+                )
             )
         if filters.city:
             q = q.filter(func.lower(Organization.city) == filters.city.lower())
@@ -99,3 +110,93 @@ class OrganizationRepository:
 
         chunk = rows[filters.offset : filters.offset + filters.limit]
         return total, chunk
+
+    def get_owned_by_user(self, owner_user_id: int) -> Organization | None:
+        return (
+            self.db.query(Organization)
+            .filter(Organization.owner_user_id == owner_user_id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+
+    def get_by_id(self, organization_id: int) -> Organization | None:
+        return self.db.query(Organization).filter(Organization.id == organization_id).first()
+
+    def list_public_wards(self, organization_id: int, limit: int = 240) -> list[Animal]:
+        return (
+            self.db.query(Animal)
+            .options(joinedload(Animal.photos), selectinload(Animal.help_requests))
+            .filter(
+                Animal.organization_id == organization_id,
+                Animal.status.notin_(("adopted", "archived")),
+            )
+            .order_by(Animal.is_urgent.desc(), Animal.id.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def list_org_events(self, organization_id: int, limit: int = 50) -> list[Event]:
+        return (
+            self.db.query(Event)
+            .filter(
+                Event.organization_id == organization_id,
+                Event.is_published.is_(True),
+                Event.is_archived.is_(False),
+            )
+            .order_by(Event.starts_at.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def list_org_help_requests_open(self, organization_id: int, limit: int = 80) -> list[HelpRequest]:
+        return (
+            self.db.query(HelpRequest)
+            .filter(
+                HelpRequest.organization_id == organization_id,
+                HelpRequest.is_published.is_(True),
+                HelpRequest.is_archived.is_(False),
+                HelpRequest.status == "open",
+            )
+            .order_by(HelpRequest.is_urgent.desc(), HelpRequest.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def list_org_reports(self, organization_id: int, limit: int = 50) -> list[OrganizationReport]:
+        return (
+            self.db.query(OrganizationReport)
+            .filter(
+                OrganizationReport.organization_id == organization_id,
+                OrganizationReport.is_published.is_(True),
+            )
+            .order_by(OrganizationReport.published_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def list_org_home_stories(self, organization_id: int, limit: int = 50) -> list[OrganizationHomeStory]:
+        return (
+            self.db.query(OrganizationHomeStory)
+            .filter(OrganizationHomeStory.organization_id == organization_id)
+            .order_by(
+                OrganizationHomeStory.sort_order.asc(),
+                OrganizationHomeStory.adopted_at.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
+    def list_org_articles_by_author(self, author_user_id: int, limit: int = 40) -> list[KnowledgeArticle]:
+        return (
+            self.db.query(KnowledgeArticle)
+            .filter(
+                KnowledgeArticle.author_user_id == author_user_id,
+                KnowledgeArticle.owner_role == "organization",
+                KnowledgeArticle.is_published.is_(True),
+                KnowledgeArticle.is_archived.is_(False),
+                KnowledgeArticle.is_context_tip.is_(False),
+            )
+            .order_by(KnowledgeArticle.created_at.desc())
+            .limit(limit)
+            .all()
+        )

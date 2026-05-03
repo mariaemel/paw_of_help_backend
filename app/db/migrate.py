@@ -84,13 +84,17 @@ def _backfill_animal_catalog_assignments_from_legacy_json(conn) -> None:
 
 
 _VOLUNTEER_COMPETENCY_SEED: tuple[tuple[str, str, int], ...] = (
-    ("walk", "Выгул / Уход", 10),
-    ("photo_video", "Фото / Видеосъемка", 20),
+    ("walk", "Выгул / уход", 10),
+    ("photo_video", "Фото / видео", 20),
     ("foster", "Передержка", 30),
-    ("texts_social", "Тексты / Соцсети", 40),
-    ("manual", "Помощь руками", 50),
+    ("texts_social", "SMM / тексты", 40),
+    ("manual", "Помощь в приюте", 50),
     ("auto", "Автопомощь", 60),
-    ("medical", "Медицинская помощь", 70),
+    ("medical", "Медицина", 70),
+    ("rescue", "Спасение", 80),
+    ("events", "Мероприятия", 90),
+    ("fundraising", "Фандрайзинг", 100),
+    ("other", "Другое", 110),
 )
 
 
@@ -163,6 +167,33 @@ def _seed_volunteer_competency_items_if_empty(conn) -> None:
             ),
             {"slug": slug, "label": label, "so": sort_order},
         )
+
+
+def _merge_volunteer_competency_catalog(conn) -> None:
+    """Добавляет новые компетенции и подтягивает подписи (после расширения ТЗ)."""
+    if not _has_table(conn, "volunteer_competency_items"):
+        return
+    existing = {
+        str(r[0]): int(r[1])
+        for r in conn.execute(text("SELECT slug, id FROM volunteer_competency_items")).fetchall()
+    }
+    for slug, label, sort_order in _VOLUNTEER_COMPETENCY_SEED:
+        if slug not in existing:
+            conn.execute(
+                text(
+                    "INSERT INTO volunteer_competency_items (slug, label, sort_order, is_active) "
+                    "VALUES (:slug, :label, :so, 1)"
+                ),
+                {"slug": slug, "label": label, "so": sort_order},
+            )
+        else:
+            conn.execute(
+                text(
+                    "UPDATE volunteer_competency_items SET label = :label, sort_order = :so "
+                    "WHERE slug = :slug"
+                ),
+                {"slug": slug, "label": label, "so": sort_order},
+            )
 
 
 def _backfill_volunteer_competency_assignments(conn) -> None:
@@ -244,6 +275,10 @@ def ensure_sqlite_schema(engine: Engine) -> None:
         if "is_phone_verified" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN is_phone_verified BOOLEAN DEFAULT 0 NOT NULL"))
 
+        cols_u = _table_columns(conn, "users")
+        if "personal_data_consent_at" not in cols_u:
+            conn.execute(text("ALTER TABLE users ADD COLUMN personal_data_consent_at DATETIME"))
+
         if not _has_table(conn, "organizations"):
             conn.execute(
                 text(
@@ -280,6 +315,90 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE organizations ADD COLUMN owner_user_id INTEGER"))
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_organizations_owner_user_id ON organizations (owner_user_id)")
+            )
+
+        if _has_table(conn, "organizations"):
+            org_cols = _table_columns(conn, "organizations")
+            org_alters: list[tuple[str, str]] = [
+                ("region", "VARCHAR(160)"),
+                ("tagline", "VARCHAR(160)"),
+                ("phone", "VARCHAR(64)"),
+                ("email", "VARCHAR(255)"),
+                ("social_links_json", "TEXT"),
+                ("logo_path", "VARCHAR(500)"),
+                ("cover_path", "VARCHAR(500)"),
+                ("admission_rules", "TEXT"),
+                ("adoption_howto", "TEXT"),
+                ("verified_organization", "BOOLEAN DEFAULT 0 NOT NULL"),
+                ("founded_year", "INTEGER"),
+                ("about_html", "TEXT"),
+                ("gallery_json", "TEXT"),
+                ("inn", "VARCHAR(32)"),
+                ("ogrn", "VARCHAR(32)"),
+                ("bank_account", "VARCHAR(64)"),
+                ("help_sections_json", "TEXT"),
+                ("has_chat_contact", "BOOLEAN DEFAULT 0 NOT NULL"),
+            ]
+            for col, ddl in org_alters:
+                if col not in org_cols:
+                    conn.execute(text(f"ALTER TABLE organizations ADD COLUMN {col} {ddl}"))
+
+        if not _has_table(conn, "organization_reports"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE organization_reports (
+                        id INTEGER NOT NULL,
+                        organization_id INTEGER NOT NULL,
+                        title VARCHAR(255) NOT NULL,
+                        summary VARCHAR(600),
+                        detail_url VARCHAR(2048),
+                        body TEXT,
+                        published_at DATETIME NOT NULL,
+                        is_published BOOLEAN NOT NULL,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(organization_id) REFERENCES organizations (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_reports_org_id "
+                    "ON organization_reports (organization_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_reports_published_at "
+                    "ON organization_reports (published_at)"
+                )
+            )
+
+        if not _has_table(conn, "organization_home_stories"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE organization_home_stories (
+                        id INTEGER NOT NULL,
+                        organization_id INTEGER NOT NULL,
+                        animal_name VARCHAR(120) NOT NULL,
+                        story TEXT NOT NULL,
+                        photo_path VARCHAR(500),
+                        adopted_at DATE NOT NULL,
+                        sort_order INTEGER NOT NULL,
+                        created_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(organization_id) REFERENCES organizations (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_home_stories_org_id "
+                    "ON organization_home_stories (organization_id)"
+                )
             )
 
         if not _has_table(conn, "knowledge_articles"):
@@ -366,6 +485,7 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         latitude FLOAT,
                         longitude FLOAT,
                         help_type VARCHAR(40) NOT NULL,
+                        urgency_level VARCHAR(32) NOT NULL DEFAULT 'normal',
                         is_urgent BOOLEAN NOT NULL,
                         volunteer_needed BOOLEAN NOT NULL,
                         volunteer_requirements TEXT,
@@ -399,6 +519,13 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             hr_cols = _table_columns(conn, "help_requests")
             if "deadline_note" not in hr_cols:
                 conn.execute(text("ALTER TABLE help_requests ADD COLUMN deadline_note VARCHAR(255)"))
+            hr_cols2 = _table_columns(conn, "help_requests")
+            if "urgency_level" not in hr_cols2:
+                conn.execute(
+                    text(
+                        "ALTER TABLE help_requests ADD COLUMN urgency_level VARCHAR(32) NOT NULL DEFAULT 'normal'"
+                    )
+                )
 
         if _has_table(conn, "animals"):
             ac = _table_columns(conn, "animals")
@@ -523,7 +650,6 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                 ("animal_types_json", "TEXT"),
                 ("experience_level", "VARCHAR(40)"),
                 ("avatar_path", "VARCHAR(500)"),
-                ("rating", "FLOAT DEFAULT 0 NOT NULL"),
                 ("completed_tasks_count", "INTEGER DEFAULT 0 NOT NULL"),
                 ("is_available", "BOOLEAN DEFAULT 1 NOT NULL"),
                 ("latitude", "FLOAT"),
@@ -540,10 +666,6 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         "ON volunteer_profiles (experience_level)"
                     )
                 )
-            if "rating" in vp2:
-                conn.execute(
-                    text("CREATE INDEX IF NOT EXISTS ix_volunteer_profiles_rating ON volunteer_profiles (rating)")
-                )
             if "is_available" in vp2:
                 conn.execute(
                     text(
@@ -558,36 +680,152 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             )
             _ensure_volunteer_competency_schema(conn)
             _seed_volunteer_competency_items_if_empty(conn)
+            _merge_volunteer_competency_catalog(conn)
             _backfill_volunteer_competency_assignments(conn)
             _drop_sqlite_columns_if_exist(conn, "volunteer_profiles", ["competencies_json"])
 
-        if not _has_table(conn, "volunteer_reviews"):
+            vp3 = _table_columns(conn, "volunteer_profiles")
+            if "has_own_transport" not in vp3:
+                conn.execute(
+                    text("ALTER TABLE volunteer_profiles ADD COLUMN has_own_transport BOOLEAN DEFAULT 0 NOT NULL")
+                )
+            if "can_travel_other_area" not in vp3:
+                conn.execute(
+                    text(
+                        "ALTER TABLE volunteer_profiles ADD COLUMN can_travel_other_area BOOLEAN DEFAULT 1 NOT NULL"
+                    )
+                )
+            vp4 = _table_columns(conn, "volunteer_profiles")
+            if "location_district" not in vp4:
+                conn.execute(text("ALTER TABLE volunteer_profiles ADD COLUMN location_district VARCHAR(120)"))
+            if "help_format" not in vp4:
+                conn.execute(text("ALTER TABLE volunteer_profiles ADD COLUMN help_format VARCHAR(24)"))
+            if "has_veterinary_education" not in vp4:
+                conn.execute(
+                    text(
+                        "ALTER TABLE volunteer_profiles ADD COLUMN has_veterinary_education "
+                        "BOOLEAN DEFAULT 0 NOT NULL"
+                    )
+                )
+            if "weekly_availability_json" not in vp4:
+                conn.execute(text("ALTER TABLE volunteer_profiles ADD COLUMN weekly_availability_json TEXT"))
+            if "accepts_night_urgency" not in vp4:
+                conn.execute(
+                    text(
+                        "ALTER TABLE volunteer_profiles ADD COLUMN accepts_night_urgency "
+                        "BOOLEAN DEFAULT 0 NOT NULL"
+                    )
+                )
+            if "travel_area_mode" not in vp4:
+                conn.execute(text("ALTER TABLE volunteer_profiles ADD COLUMN travel_area_mode VARCHAR(32)"))
+            _drop_sqlite_columns_if_exist(conn, "volunteer_profiles", ["rating"])
+
+        if _has_table(conn, "volunteer_reviews"):
+            conn.execute(text("DROP TABLE volunteer_reviews"))
+
+        if _has_table(conn, "user_profiles"):
+            up_cols = _table_columns(conn, "user_profiles")
+            if "avatar_path" not in up_cols:
+                conn.execute(text("ALTER TABLE user_profiles ADD COLUMN avatar_path VARCHAR(500)"))
+
+        if not _has_table(conn, "animal_adoption_applications"):
             conn.execute(
                 text(
                     """
-                    CREATE TABLE volunteer_reviews (
+                    CREATE TABLE animal_adoption_applications (
                         id INTEGER NOT NULL,
-                        volunteer_user_id INTEGER NOT NULL,
-                        author_name VARCHAR(255) NOT NULL,
-                        author_avatar_path VARCHAR(500),
-                        review_date DATETIME NOT NULL,
-                        rating INTEGER NOT NULL,
-                        text TEXT NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        animal_id INTEGER NOT NULL,
+                        status VARCHAR(32) NOT NULL,
+                        message TEXT,
                         created_at DATETIME,
+                        updated_at DATETIME,
                         PRIMARY KEY (id),
-                        FOREIGN KEY(volunteer_user_id) REFERENCES users (id)
+                        CONSTRAINT uq_adoption_application_user_animal UNIQUE (user_id, animal_id),
+                        FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
+                        FOREIGN KEY(animal_id) REFERENCES animals (id) ON DELETE CASCADE
                     )
                     """
                 )
             )
             conn.execute(
                 text(
-                    "CREATE INDEX IF NOT EXISTS ix_volunteer_reviews_volunteer_user_id "
-                    "ON volunteer_reviews (volunteer_user_id)"
+                    "CREATE INDEX IF NOT EXISTS ix_adoption_applications_user_id "
+                    "ON animal_adoption_applications (user_id)"
                 )
             )
             conn.execute(
                 text(
-                    "CREATE INDEX IF NOT EXISTS ix_volunteer_reviews_review_date ON volunteer_reviews (review_date)"
+                    "CREATE INDEX IF NOT EXISTS ix_adoption_applications_animal_id "
+                    "ON animal_adoption_applications (animal_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_adoption_applications_status "
+                    "ON animal_adoption_applications (status)"
+                )
+            )
+
+        if _has_table(conn, "help_requests") and not _has_table(conn, "volunteer_help_responses"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE volunteer_help_responses (
+                        id INTEGER NOT NULL,
+                        volunteer_user_id INTEGER NOT NULL,
+                        help_request_id INTEGER NOT NULL,
+                        status VARCHAR(32) NOT NULL,
+                        message TEXT,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        PRIMARY KEY (id),
+                        CONSTRAINT uq_vol_help_resp_user_request UNIQUE (volunteer_user_id, help_request_id),
+                        FOREIGN KEY(volunteer_user_id) REFERENCES users (id) ON DELETE CASCADE,
+                        FOREIGN KEY(help_request_id) REFERENCES help_requests (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_vol_help_resp_volunteer ON volunteer_help_responses "
+                    "(volunteer_user_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_vol_help_resp_request ON volunteer_help_responses "
+                    "(help_request_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_vol_help_resp_status ON volunteer_help_responses (status)"
+                )
+            )
+
+        if _has_table(conn, "volunteer_help_responses") and not _has_table(conn, "volunteer_help_response_reports"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE volunteer_help_response_reports (
+                        id INTEGER NOT NULL,
+                        volunteer_help_response_id INTEGER NOT NULL,
+                        body TEXT NOT NULL,
+                        submitted_at DATETIME,
+                        org_accepted_at DATETIME,
+                        org_rejection_reason TEXT,
+                        PRIMARY KEY (id),
+                        CONSTRAINT uq_vol_help_report_response UNIQUE (volunteer_help_response_id),
+                        FOREIGN KEY(volunteer_help_response_id) REFERENCES volunteer_help_responses (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_vol_help_reports_response "
+                    "ON volunteer_help_response_reports (volunteer_help_response_id)"
                 )
             )

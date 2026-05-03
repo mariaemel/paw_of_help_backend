@@ -9,6 +9,7 @@ HELP_TYPE_OPTIONS: list[dict[str, str]] = [
     {"id": "manual", "label": "Помощь руками"},
     {"id": "auto", "label": "Автопомощь"},
     {"id": "medical", "label": "Лекарства и кровь"},
+    {"id": "food", "label": "Корм"},
 ]
 
 
@@ -35,7 +36,6 @@ class UrgentRequestListItem(BaseModel):
     deadline_label: str | None = None
     status: str
     target_amount: float | None = None
-    collected_amount: float | None = None
     primary_photo_url: str | None = None
     badges: list[str] = Field(default_factory=list)
 
@@ -74,9 +74,6 @@ class UrgentFilterParams(BaseModel):
 
 
 class UrgentRequestCreate(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="organization")
-    organization_id: int
     animal_id: int | None = None
     title: str = Field(min_length=3, max_length=255)
     description: str = Field(min_length=10)
@@ -90,7 +87,6 @@ class UrgentRequestCreate(BaseModel):
     volunteer_requirements: str | None = None
     volunteer_competencies: list[str] = Field(default_factory=list)
     target_amount: float | None = None
-    collected_amount: float = 0.0
     deadline_at: datetime | None = None
     deadline_note: str | None = Field(default=None, max_length=255)
     media_path: str | None = None
@@ -99,8 +95,6 @@ class UrgentRequestCreate(BaseModel):
 
 
 class UrgentRequestUpdate(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="organization")
     animal_id: int | None = None
     title: str | None = Field(default=None, min_length=3, max_length=255)
     description: str | None = Field(default=None, min_length=10)
@@ -114,7 +108,6 @@ class UrgentRequestUpdate(BaseModel):
     volunteer_requirements: str | None = None
     volunteer_competencies: list[str] | None = None
     target_amount: float | None = None
-    collected_amount: float | None = None
     deadline_at: datetime | None = None
     deadline_note: str | None = Field(default=None, max_length=255)
     media_path: str | None = None

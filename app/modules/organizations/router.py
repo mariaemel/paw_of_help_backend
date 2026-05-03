@@ -7,6 +7,7 @@ from app.modules.organizations.schemas import (
     OrganizationCatalogsResponse,
     OrganizationFilterParams,
     OrganizationListResponse,
+    OrganizationPublicPage,
 )
 from app.modules.organizations.service import OrganizationService
 
@@ -54,3 +55,11 @@ def list_organizations(
 @router.get("/catalogs", response_model=OrganizationCatalogsResponse)
 def org_catalogs(service: OrganizationService = Depends(get_org_service)):
     return service.get_catalogs()
+
+
+@router.get("/{organization_id}", response_model=OrganizationPublicPage)
+def get_organization_page(
+    organization_id: int,
+    service: OrganizationService = Depends(get_org_service),
+):
+    return service.get_public_page(organization_id)

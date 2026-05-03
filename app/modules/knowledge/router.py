@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_roles
 from app.db.session import get_db
+from app.models.user import User, UserRole
 from app.modules.knowledge.repository import KnowledgeRepository
 from app.modules.knowledge.schemas import (
     KnowledgeCatalogsResponse,
@@ -51,36 +53,42 @@ def article_detail(article_id: int, service: KnowledgeService = Depends(get_know
     return service.get_detail(article_id)
 
 
+_kb_writers = require_roles(UserRole.VOLUNTEER, UserRole.ORGANIZATION)
+
+
 @router.post("", response_model=KnowledgeDetail)
-def create_article(payload: KnowledgeUpsertRequest, service: KnowledgeService = Depends(get_knowledge_service)):
-    return service.create_article(payload)
+def create_article(
+    payload: KnowledgeUpsertRequest,
+    user: User = Depends(_kb_writers),
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    return service.create_article(user, payload)
 
 
 @router.patch("/{article_id}", response_model=KnowledgeDetail)
 def update_article(
     article_id: int,
     payload: KnowledgeUpdateRequest,
+    user: User = Depends(_kb_writers),
     service: KnowledgeService = Depends(get_knowledge_service),
 ):
-    return service.update_article(article_id, payload)
+    return service.update_article(article_id, user, payload)
 
 
 @router.post("/{article_id}/archive", response_model=KnowledgeDetail)
 def archive_article(
     article_id: int,
-    actor_user_id: int = Query(...),
-    actor_role: str = Query(..., description="volunteer | organization"),
+    user: User = Depends(_kb_writers),
     service: KnowledgeService = Depends(get_knowledge_service),
 ):
-    return service.archive_article(article_id, actor_user_id, actor_role)
+    return service.archive_article(article_id, user)
 
 
 @router.delete("/{article_id}")
 def delete_article(
     article_id: int,
-    actor_user_id: int = Query(...),
-    actor_role: str = Query(..., description="volunteer | organization"),
+    user: User = Depends(_kb_writers),
     service: KnowledgeService = Depends(get_knowledge_service),
 ):
-    service.delete_article(article_id, actor_user_id, actor_role)
+    service.delete_article(article_id, user)
     return {"ok": True}

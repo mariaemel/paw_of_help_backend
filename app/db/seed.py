@@ -1,19 +1,25 @@
 import json
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
+from app.core.security import hash_password
+from app.models.adoption_application import AdoptionApplicationStatus, AnimalAdoptionApplication
 from app.models.animal import Animal, AnimalPhoto, AnimalSpecies, AnimalStatus
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.event import Event
 from app.models.help_request import HelpRequest
+from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
+from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
 from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
-from app.models.profile import VolunteerProfile, VolunteerReview
+from app.models.organization_home_story import OrganizationHomeStory
+from app.models.organization_report import OrganizationReport
+from app.models.profile import UserProfile, VolunteerProfile
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.models.user import User, UserRole
 from app.modules.volunteers.constants import COMPETENCY_OPTIONS
@@ -108,17 +114,19 @@ def ensure_animal_catalog_items(db: Session) -> None:
 def ensure_volunteer_competency_items(db: Session) -> None:
     for idx, opt in enumerate(COMPETENCY_OPTIONS, start=1):
         slug = opt["id"]
-        exists_row = db.query(VolunteerCompetencyItem.id).filter(VolunteerCompetencyItem.slug == slug).first()
-        if exists_row:
-            continue
-        db.add(
-            VolunteerCompetencyItem(
-                slug=slug,
-                label=opt["label"],
-                sort_order=idx * 10,
-                is_active=True,
+        row = db.query(VolunteerCompetencyItem).filter(VolunteerCompetencyItem.slug == slug).first()
+        if row is None:
+            db.add(
+                VolunteerCompetencyItem(
+                    slug=slug,
+                    label=opt["label"],
+                    sort_order=idx * 10,
+                    is_active=True,
+                )
             )
-        )
+        else:
+            row.label = opt["label"]
+            row.sort_order = idx * 10
 
 
 @dataclass(frozen=True)
@@ -148,14 +156,17 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         breed="Метис",
         sex="female",
         age_months=24,
-        full_description="Мусю нашли зимой, сейчас она полностью готова к пристройству.",
-        health_features="Хроническая почечная недостаточность начальной стадии.",
-        treatment_required="Пониженное содержание фосфора в корме, осмотр у врача 1 раз в полгода.",
-        location_city="Москва",
+        full_description=(
+            "Мусю нашли зимой, сейчас проходит восстановление после операции на лапе "
+            "и нуждается в поддержке до полного выздоровления."
+        ),
+        health_features="Период восстановления после операции.",
+        treatment_required="Контроль у хирурга, ограниченная активность до заживления.",
+        location_city="Екатеринбург",
         is_urgent=True,
-        urgent_needs_text="Срочный сбор: нужен лечебный корм.",
-        status=AnimalStatus.LOOKING_FOR_HOME.value,
-        help_options="Корм, финансовая помощь, репост.",
+        urgent_needs_text="Нужна операция на лапе и поддержка восстановления.",
+        status=AnimalStatus.ON_TREATMENT.value,
+        help_options="Операция на лапе, финансовая помощь, репост.",
         catalog_keys=(
             ("health_care", "sterilized"),
             ("health_care", "vaccinated_full"),
@@ -175,7 +186,7 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         full_description="Маруся — спокойная и внимательная кошка, любит общение и спокойную обстановку.",
         health_features=None,
         treatment_required=None,
-        location_city="Москва",
+        location_city="Екатеринбург",
         is_urgent=False,
         urgent_needs_text=None,
         status=AnimalStatus.LOOKING_FOR_HOME.value,
@@ -221,7 +232,7 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         full_description="Ричи восстанавливается после операции и нуждается в передержке.",
         health_features="Период восстановления после операции.",
         treatment_required="Контроль у хирурга через 2 недели.",
-        location_city="Москва",
+        location_city="Екатеринбург",
         is_urgent=True,
         urgent_needs_text="Срочно нужна передержка и помощь транспортом.",
         status=AnimalStatus.ON_TREATMENT.value,
@@ -354,9 +365,22 @@ def ensure_demo_knowledge_articles(db: Session, volunteer_user_id: int, organiza
             organization_user_id,
             "organization",
         ),
+        (
+            "Как правильно кормить кошку в период адаптации",
+            "Рацион, режим и объём порций для кошки в первые недели в новом доме.",
+            "care",
+            5,
+            False,
+            volunteer_user_id,
+            "volunteer",
+        ),
     ]
     for title, summary, category, read_minutes, is_tip, uid, role in rows:
-        article = db.query(KnowledgeArticle).filter(KnowledgeArticle.title == title).first()
+        article = (
+            db.query(KnowledgeArticle)
+            .filter(KnowledgeArticle.title == title, KnowledgeArticle.author_user_id == uid)
+            .first()
+        )
         if article is None:
             article = KnowledgeArticle(
                 author_user_id=uid,
@@ -449,24 +473,68 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
     urgent_photos_ready = _materialize_seed_urgent_images()
     musya = db.query(Animal).filter(Animal.name == "Муся").first()
     richi = db.query(Animal).filter(Animal.name == "Ричи").first()
+    marusya = db.query(Animal).filter(Animal.name == "Маруся").first()
+    grey = db.query(Animal).filter(Animal.name == "Грей").first()
     rows = [
         {
-            "organization_id": org2.id,
-            "animal_id": musya.id if musya and musya.organization_id == org2.id else None,
-            "title": "Кот Пушок",
-            "description": "Попал под машину. Нужна срочная операция на лапе и стационар.",
-            "city": "Москва",
+            "organization_id": org1.id,
+            "animal_id": musya.id if musya and musya.organization_id == org1.id else None,
+            "title": "На операцию на лапу",
+            "description": "Нужна операция на лапе и стационар, последующее восстановление.",
+            "city": "Екатеринбург",
             "address": "Ветеринарная клиника, ул. Садовая, 12",
-            "help_type": "financial",
+            "help_type": "medical",
             "is_urgent": True,
             "volunteer_needed": False,
             "volunteer_requirements": None,
             "volunteer_competencies_json": "[]",
             "target_amount": 15000.0,
-            "collected_amount": 5000.0,
+            "collected_amount": 0.0,
             "deadline_at": datetime(2026, 5, 3, 23, 0, 0),
             "deadline_note": None,
-            "media_path": "demo_animals/musya.png",
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org1.id,
+            "animal_id": marusya.id if marusya and marusya.organization_id == org1.id else None,
+            "title": "На корм Gastrointestinal",
+            "description": "Нужна поддержка расходами на диетический корм после обследования.",
+            "city": "Екатеринбург",
+            "address": None,
+            "help_type": "food",
+            "is_urgent": True,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 5000.0,
+            "collected_amount": 0.0,
+            "deadline_at": None,
+            "deadline_note": None,
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org2.id,
+            "animal_id": grey.id if grey and grey.organization_id == org2.id else None,
+            "title": "Новые поводки и ошейники",
+            "description": "Нужно закупить поводки и ошейники для выгула нескольких подопечных.",
+            "city": "Санкт-Петербург",
+            "address": None,
+            "help_type": "financial",
+            "is_urgent": False,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 3000.0,
+            "collected_amount": 0.0,
+            "deadline_at": None,
+            "deadline_note": None,
+            "media_path": None,
             "status": "open",
             "is_published": True,
             "is_archived": False,
@@ -476,7 +544,7 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "animal_id": richi.id if richi and richi.organization_id == org1.id else None,
             "title": "Пёс Рекс",
             "description": "Нужно отвезти крупную собаку из приюта в клинику на рентген.",
-            "city": "Москва",
+            "city": "Екатеринбург",
             "address": "ул. Белинского, 7",
             "help_type": "auto",
             "is_urgent": True,
@@ -522,28 +590,521 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
         for key, value in spec.items():
             setattr(item, key, value)
 
+    _sync_help_demo_animal_links(db)
+
+
+def _sync_help_demo_animal_links(db: Session) -> None:
+    links: tuple[tuple[str, str], ...] = (
+        ("На операцию на лапу", "Муся"),
+        ("На корм Gastrointestinal", "Маруся"),
+        ("Новые поводки и ошейники", "Грей"),
+    )
+    for title, animal_name in links:
+        animal = db.query(Animal).filter(Animal.name == animal_name).first()
+        hr = db.query(HelpRequest).filter(HelpRequest.title == title).first()
+        if hr and animal and animal.organization_id == hr.organization_id:
+            hr.animal_id = animal.id
+
+
+_DEMO_LK_TRANSPORT_DESCRIPTION = (
+    "Срочно нужна перевозка кота Василия в ветклинику на ул. Малышева. "
+    "Требуется аккуратная транспортировка после операции"
+)
+
+
+def _migrate_lk_demo_help_request_titles(
+    db: Session,
+    volunteer_user_id: int,
+    organization_id: int,
+    demo_title: str,
+    today_17: datetime,
+    today_17b: datetime,
+    may7_12: datetime,
+) -> None:
+    rows = (
+        db.query(VolunteerHelpResponse)
+        .options(joinedload(VolunteerHelpResponse.help_request))
+        .filter(VolunteerHelpResponse.volunteer_user_id == volunteer_user_id)
+        .all()
+    )
+    desc = _DEMO_LK_TRANSPORT_DESCRIPTION.strip()
+    for row in rows:
+        hr = row.help_request
+        if hr is None or hr.organization_id != organization_id:
+            continue
+        if (hr.description or "").strip() != desc:
+            continue
+        if row.status == VolunteerHelpResponseStatus.PENDING.value:
+            hr.title = demo_title
+            hr.is_urgent = True
+            hr.deadline_at = today_17
+        elif row.status == VolunteerHelpResponseStatus.ACCEPTED.value:
+            hr.title = demo_title
+            hr.is_urgent = False
+            hr.deadline_at = may7_12
+        elif row.status == VolunteerHelpResponseStatus.COMPLETED.value:
+            hr.title = demo_title
+            hr.is_urgent = False
+            hr.deadline_at = today_17
+        elif row.status == VolunteerHelpResponseStatus.WITHDRAWN.value:
+            hr.title = demo_title
+            hr.is_urgent = False
+            hr.deadline_at = today_17b
+
+
+def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization) -> None:
+    v = db.query(User).filter(User.email == "volunteer1@example.com").first()
+    if v is None:
+        return
+
+    musya = (
+        db.query(Animal)
+        .filter(Animal.organization_id == org1.id, Animal.name == "Муся")
+        .first()
+    )
+    demo_title = "Перевозка"
+    now = datetime.utcnow()
+    today_17 = now.replace(hour=17, minute=0, second=0, microsecond=0)
+    today_17b = today_17 + timedelta(minutes=1)
+    may7_12 = datetime(2026, 5, 7, 12, 0, 0)
+
+    hr_specs: list[dict] = [
+        {
+            "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
+            "is_urgent": True,
+            "deadline_at": today_17,
+            "deadline_note": None,
+        },
+        {
+            "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
+            "is_urgent": False,
+            "deadline_at": may7_12,
+            "deadline_note": None,
+        },
+        {
+            "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
+            "is_urgent": False,
+            "deadline_at": today_17,
+            "deadline_note": None,
+        },
+        {
+            "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
+            "is_urgent": False,
+            "deadline_at": today_17b,
+            "deadline_note": None,
+        },
+    ]
+
+    response_statuses = (
+        VolunteerHelpResponseStatus.PENDING.value,
+        VolunteerHelpResponseStatus.ACCEPTED.value,
+        VolunteerHelpResponseStatus.COMPLETED.value,
+        VolunteerHelpResponseStatus.WITHDRAWN.value,
+    )
+
+    _migrate_lk_demo_help_request_titles(
+        db, v.id, org1.id, demo_title, today_17, today_17b, may7_12
+    )
+
+    for spec, resp_status in zip(hr_specs, response_statuses):
+        hr = (
+            db.query(HelpRequest)
+            .filter(
+                HelpRequest.organization_id == org1.id,
+                HelpRequest.title == demo_title,
+                HelpRequest.help_type == "auto",
+                HelpRequest.is_urgent.is_(spec["is_urgent"]),
+                HelpRequest.deadline_at == spec["deadline_at"],
+            )
+            .first()
+        )
+        common_hr = {
+            "organization_id": org1.id,
+            "animal_id": musya.id if musya else None,
+            "title": demo_title,
+            "description": spec["description"],
+            "city": "Екатеринбург",
+            "address": "ул. Малышева, ветклиника",
+            "help_type": "auto",
+            "is_urgent": spec["is_urgent"],
+            "volunteer_needed": True,
+            "volunteer_requirements": "Нужен аккуратный перевозчик с опытом.",
+            "volunteer_competencies_json": json.dumps(["auto"], ensure_ascii=False),
+            "target_amount": None,
+            "collected_amount": 0.0,
+            "deadline_at": spec["deadline_at"],
+            "deadline_note": spec["deadline_note"],
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        }
+        if hr is None:
+            hr = HelpRequest(**common_hr)
+            db.add(hr)
+            db.flush()
+        else:
+            for key, value in common_hr.items():
+                setattr(hr, key, value)
+
+        row = (
+            db.query(VolunteerHelpResponse)
+            .filter(
+                VolunteerHelpResponse.volunteer_user_id == v.id,
+                VolunteerHelpResponse.help_request_id == hr.id,
+            )
+            .first()
+        )
+        msg = "Готов помочь с перевозкой, есть автомобиль и переноска."
+        if row is None:
+            row = VolunteerHelpResponse(
+                volunteer_user_id=v.id,
+                help_request_id=hr.id,
+                status=resp_status,
+                message=msg,
+                created_at=now - timedelta(days=3),
+                updated_at=now,
+            )
+            db.add(row)
+            db.flush()
+        else:
+            row.status = resp_status
+            row.message = msg
+            row.updated_at = now
+
+        if row.report is not None and resp_status != VolunteerHelpResponseStatus.COMPLETED.value:
+            db.delete(row.report)
+            db.flush()
+
+        if resp_status == VolunteerHelpResponseStatus.COMPLETED.value:
+            rep = row.report
+            submitted = now - timedelta(days=1)
+            accepted = now - timedelta(hours=3)
+            body = (
+                "Кота Василия доставили в клинику на ул. Малышева, врач принял, состояние стабильное."
+            )
+            if rep is None:
+                db.add(
+                    VolunteerHelpResponseReport(
+                        volunteer_help_response_id=row.id,
+                        body=body,
+                        submitted_at=submitted,
+                        org_accepted_at=accepted,
+                        org_rejection_reason=None,
+                    )
+                )
+            else:
+                rep.body = body
+                rep.submitted_at = submitted
+                rep.org_accepted_at = accepted
+                rep.org_rejection_reason = None
+
+
+def sync_demo_adoption_applications_for_profile_mock(db: Session) -> None:
+    u = db.query(User).filter(User.email == "user_demo@example.com").first()
+    if u is None:
+        return
+
+    targets: list[tuple[str, str]] = [
+        (
+            "Муся",
+            "Здравствуйте! Готова обсудить условия и приехать на знакомство с Мусей.",
+        ),
+        (
+            "Маруся",
+            "Маруся понравилась по описанию, есть подходящее пространство в квартире.",
+        ),
+    ]
+
+    for aname, message in targets:
+        animal = db.query(Animal).filter(Animal.name == aname).first()
+        if animal is None:
+            continue
+        row = (
+            db.query(AnimalAdoptionApplication)
+            .filter(
+                AnimalAdoptionApplication.user_id == u.id,
+                AnimalAdoptionApplication.animal_id == animal.id,
+            )
+            .first()
+        )
+        ts = datetime.utcnow() - timedelta(days=1)
+        if row is None:
+            db.add(
+                AnimalAdoptionApplication(
+                    user_id=u.id,
+                    animal_id=animal.id,
+                    status=AdoptionApplicationStatus.PENDING_REVIEW.value,
+                    message=message,
+                    created_at=ts,
+                    updated_at=ts,
+                )
+            )
+        else:
+            row.status = AdoptionApplicationStatus.PENDING_REVIEW.value
+            row.message = message
+            row.updated_at = datetime.utcnow()
+
+
+_DEMO_LOGIN_PASSWORD_PLAIN = "demo12345"
+
+
+def sync_demo_accounts_password(db: Session) -> None:
+    emails = (
+        "user_demo@example.com",
+        "user_demo2@example.com",
+        "volunteer1@example.com",
+        "volunteer2@example.com",
+        "org1@example.com",
+        "org2@example.com",
+    )
+    h = hash_password(_DEMO_LOGIN_PASSWORD_PLAIN)
+    for mail in emails:
+        u = db.query(User).filter(User.email == mail).first()
+        if u is not None:
+            u.password_hash = h
+
+
+def _ensure_demo_user_with_profile(
+    db: Session,
+    *,
+    email: str,
+    phone: str,
+    full_name: str,
+    bio: str,
+    password_hash: str,
+) -> User:
+    u = db.query(User).filter(User.email == email).first()
+    if u is None:
+        u = User(
+            email=email,
+            phone=phone,
+            password_hash=password_hash,
+            full_name=full_name,
+            role=UserRole.USER,
+            is_email_verified=True,
+            personal_data_consent_at=datetime.utcnow(),
+        )
+        db.add(u)
+        db.flush()
+        db.add(UserProfile(user_id=u.id, bio=bio))
+    else:
+        if u.user_profile is None:
+            db.add(UserProfile(user_id=u.id, bio=bio))
+        elif u.user_profile.bio is None and bio:
+            u.user_profile.bio = bio
+    return u
+
+
+def ensure_demo_plain_users_and_adoption_applications(db: Session) -> None:
+    ph = hash_password(_DEMO_LOGIN_PASSWORD_PLAIN)
+    _ensure_demo_user_with_profile(
+        db,
+        email="user_demo@example.com",
+        phone="+79990001001",
+        full_name="Мария Козлова",
+        bio="Ищу кошку для дома без других животных, есть опыт ухода.",
+        password_hash=ph,
+    )
+    _ensure_demo_user_with_profile(
+        db,
+        email="user_demo2@example.com",
+        phone="+79990001002",
+        full_name="Игорь Васильев",
+        bio="Планируем пристройство собаки, живём в доме с участком.",
+        password_hash=ph,
+    )
+
+    animals = {
+        row.name: row
+        for row in db.query(Animal).filter(Animal.name.in_(["Муся", "Маруся", "Ричи", "Боня", "Грей"])).all()
+    }
+
+    specs: list[tuple[str, str, str, AdoptionApplicationStatus]] = [
+        (
+            "user_demo@example.com",
+            "Муся",
+            "Здравствуйте! Готова обсудить условия и приехать на знакомство.",
+            AdoptionApplicationStatus.PENDING_REVIEW,
+        ),
+        (
+            "user_demo@example.com",
+            "Маруся",
+            "Маруся понравилась по описанию, есть подходящее пространство в квартире.",
+            AdoptionApplicationStatus.PENDING_REVIEW,
+        ),
+        (
+            "user_demo2@example.com",
+            "Боня",
+            "Подали заявку на Боню, но пока переезжаем — не сможем взять в ближайший месяц.",
+            AdoptionApplicationStatus.REJECTED,
+        ),
+        (
+            "volunteer1@example.com",
+            "Ричи",
+            "Могу предложить короткую передержку и помощь на выходных.",
+            AdoptionApplicationStatus.PENDING_REVIEW,
+        ),
+        (
+            "volunteer2@example.com",
+            "Грей",
+            "Рассматриваем семейное пристройство, есть опыт с собаками.",
+            AdoptionApplicationStatus.PENDING_REVIEW,
+        ),
+    ]
+
+    days_ago = [2, 5, 1, 3, 1]
+    for idx, (user_email, aname, message, status) in enumerate(specs):
+        au = db.query(User).filter(User.email == user_email).first()
+        if au is None:
+            continue
+        animal = animals.get(aname)
+        if animal is None:
+            continue
+        exists = (
+            db.query(AnimalAdoptionApplication.id)
+            .filter(
+                AnimalAdoptionApplication.user_id == au.id,
+                AnimalAdoptionApplication.animal_id == animal.id,
+            )
+            .first()
+        )
+        if exists:
+            continue
+        created = datetime.utcnow() - timedelta(days=days_ago[idx % len(days_ago)])
+        db.add(
+            AnimalAdoptionApplication(
+                user_id=au.id,
+                animal_id=animal.id,
+                status=status.value,
+                message=message,
+                created_at=created,
+                updated_at=created,
+            )
+        )
+
+
+def ensure_demo_organization_public_pages(db: Session, org1: Organization, org2: Organization) -> None:
+    demo_desc = (
+        "Мы спасаем крупных собак после ДТП и жестокого обращения: лечение, реабилитация, социализация "
+        "и поиск дома. Сегодня под опекой более 150 животных."
+    )
+    placeholder = "Фонд помощи животным."
+    if (org1.description or "").strip() in (placeholder, ""):
+        org1.description = demo_desc
+    org1.tagline = org1.tagline or "Помощь собакам крупного размера и собакам-инвалидам"
+    if org1.city and org1.city.lower() == "москва":
+        org1.city = "Екатеринбург"
+    if (org1.city or "").strip().lower() == "екатеринбург":
+        rl = (org1.region or "").strip().lower()
+        if not org1.region or rl == "екатеринбург" or "свердловск" in rl:
+            org1.region = "Свердловская область"
+    org1.phone = org1.phone or "+7 (343) 000-00-01"
+    org1.email = org1.email or "info@verni-drug.example.org"
+    if not getattr(org1, "social_links_json", None):
+        org1.social_links_json = json.dumps(
+            [
+                {"label": "Telegram", "url": "https://t.me/verni_drug_demo"},
+                {"label": "ВКонтакте", "url": "https://vk.com/verni_drug_demo"},
+                {"label": "Instagram", "url": "https://instagram.com/verni_drug_demo"},
+            ],
+            ensure_ascii=False,
+        )
+    org1.admission_rules = org1.admission_rules or (
+        "Приём животных по предварительной записи после короткой анкеты. Работаем по согласованию с городскими службами."
+    )
+    org1.adoption_howto = org1.adoption_howto or (
+        "Оставьте заявку на сайте или свяжитесь с куратором — подберём питомца и договоримся о знакомстве "
+        "и условиях передачи."
+    )
+    org1.founded_year = org1.founded_year or 2015
+    org1.about_html = org1.about_html or (
+        "Фонд основан командой кинологов и ведёт прозрачную отчётность. Принимаем поддержку наличными "
+        "и безналично, партнёрству рады всегда."
+    )
+    org1.gallery_json = org1.gallery_json or "[]"
+    org1.inn = org1.inn or "6678099999"
+    org1.ogrn = org1.ogrn or "1186678009999"
+    org1.bank_account = org1.bank_account or "40702810000000000001"
+    org1.has_chat_contact = True
+
+    if not db.query(OrganizationReport).filter(OrganizationReport.organization_id == org1.id).first():
+        db.add_all(
+            [
+                OrganizationReport(
+                    organization_id=org1.id,
+                    title="Отчёт за I квартал 2026",
+                    summary="Расходы на корм, лечение и стерилизацию подопечных.",
+                    body=None,
+                    detail_url=None,
+                    published_at=datetime(2026, 4, 1, 12, 0, 0),
+                    is_published=True,
+                ),
+                OrganizationReport(
+                    organization_id=org1.id,
+                    title="Итоги зимней акции помощи",
+                    summary="Поддержали передержки и закупили лекарственные средства.",
+                    published_at=datetime(2026, 3, 18, 9, 0, 0),
+                    is_published=True,
+                ),
+            ]
+        )
+
+    if (
+        db.query(OrganizationHomeStory.id)
+        .filter(OrganizationHomeStory.organization_id == org1.id)
+        .first()
+        is None
+    ):
+        db.add_all(
+            [
+                OrganizationHomeStory(
+                    organization_id=org1.id,
+                    animal_name="Майк",
+                    story="Живёт в загородном доме с детьми: любит длинные прогулки и спокойные вечера у камина.",
+                    photo_path=None,
+                    adopted_at=date(2025, 11, 20),
+                    sort_order=0,
+                ),
+                OrganizationHomeStory(
+                    organization_id=org1.id,
+                    animal_name="Лаки",
+                    story="Стала первой собакой в семье, подружилась с домашним котом и осваивает городские парки.",
+                    photo_path=None,
+                    adopted_at=date(2026, 1, 8),
+                    sort_order=1,
+                ),
+            ]
+        )
+
+    org2.tagline = org2.tagline or "Уютный приют для кошек и котят до постоянного дома"
+    org2.has_chat_contact = False
+
 
 def seed_demo_data_if_empty(db: Session) -> None:
+    pw_demo = hash_password(_DEMO_LOGIN_PASSWORD_PLAIN)
     orgs = db.query(Organization).order_by(Organization.id.asc()).all()
     if len(orgs) < 2:
         org1 = Organization(
             name="Благотворительный фонд «Верный друг»",
-            city="Москва",
-            address="Москва, ул. Добрых дел, 10",
+            city="Екатеринбург",
+            address="Екатеринбург, ул. Добрых дел, 10",
             specialization="both",
-            needs_json=json.dumps(["urgent", "volunteers", "auto"], ensure_ascii=False),
+            needs_json=json.dumps(
+                ["urgent", "volunteers", "auto", "fundraising"], ensure_ascii=False
+            ),
             wards_count=150,
             adopted_yearly_count=47,
             description="Фонд помощи животным.",
-            latitude=55.7558,
-            longitude=37.6173,
+            latitude=56.8389,
+            longitude=60.6057,
         )
         org2 = Organization(
             name="Приют «Теплые лапы»",
             city="Санкт-Петербург",
             address="Санкт-Петербург, пр. Заботы, 5",
             specialization="cat",
-            needs_json=json.dumps(["foster", "items"], ensure_ascii=False),
+            needs_json=json.dumps(["foster", "items", "fundraising", "volunteers"], ensure_ascii=False),
             wards_count=93,
             adopted_yearly_count=28,
             description="Приют для кошек и котят.",
@@ -566,7 +1127,7 @@ def seed_demo_data_if_empty(db: Session) -> None:
         org_user_1 = User(
             email="org1@example.com",
             phone="+79990000003",
-            password_hash="seed-password-hash",
+            password_hash=pw_demo,
             full_name="Благотворительный фонд «Верный друг»",
             role=UserRole.ORGANIZATION,
             is_email_verified=True,
@@ -578,7 +1139,7 @@ def seed_demo_data_if_empty(db: Session) -> None:
         org_user_2 = User(
             email="org2@example.com",
             phone="+79990000004",
-            password_hash="seed-password-hash",
+            password_hash=pw_demo,
             full_name="Приют «Теплые лапы»",
             role=UserRole.ORGANIZATION,
             is_email_verified=True,
@@ -594,7 +1155,7 @@ def seed_demo_data_if_empty(db: Session) -> None:
         v1 = User(
             email="volunteer1@example.com",
             phone="+79990000001",
-            password_hash="seed-password-hash",
+            password_hash=pw_demo,
             full_name="Анна Смирнова",
             role=UserRole.VOLUNTEER,
             is_email_verified=True,
@@ -602,7 +1163,7 @@ def seed_demo_data_if_empty(db: Session) -> None:
         v2 = User(
             email="volunteer2@example.com",
             phone="+79990000002",
-            password_hash="seed-password-hash",
+            password_hash=pw_demo,
             full_name="Илья Петров",
             role=UserRole.VOLUNTEER,
             is_email_verified=True,
@@ -622,7 +1183,6 @@ def seed_demo_data_if_empty(db: Session) -> None:
                     travel_radius_km=30,
                     animal_types_json=json.dumps(["cat", "dog"], ensure_ascii=False),
                     experience_level="experienced",
-                    rating=4.9,
                     completed_tasks_count=24,
                     is_available=True,
                     latitude=56.8389,
@@ -636,7 +1196,6 @@ def seed_demo_data_if_empty(db: Session) -> None:
                     travel_radius_km=40,
                     animal_types_json=json.dumps(["cat"], ensure_ascii=False),
                     experience_level="beginner",
-                    rating=4.5,
                     completed_tasks_count=15,
                     is_available=True,
                     latitude=59.9343,
@@ -649,16 +1208,6 @@ def seed_demo_data_if_empty(db: Session) -> None:
         vp2 = db.query(VolunteerProfile).filter(VolunteerProfile.user_id == v2.id).one()
         _set_volunteer_competency_slugs(db, vp1.id, ("auto", "photo_video", "walk"))
         _set_volunteer_competency_slugs(db, vp2.id, ("foster", "walk", "manual"))
-        db.add(
-            VolunteerReview(
-                volunteer_user_id=v1.id,
-                author_name="Приют «Верный»",
-                author_avatar_path=None,
-                review_date=datetime(2026, 4, 12, 12, 0, 0),
-                rating=5,
-                text="Анна оперативно помогла с транспортом и сделала отличные фото для соцсетей.",
-            )
-        )
 
     volunteer_user = db.query(User).filter(User.role == UserRole.VOLUNTEER).order_by(User.id.asc()).first()
     organization_user = db.query(User).filter(User.role == UserRole.ORGANIZATION).order_by(User.id.asc()).first()
@@ -666,39 +1215,67 @@ def seed_demo_data_if_empty(db: Session) -> None:
         ensure_demo_knowledge_articles(db, volunteer_user.id, organization_user.id)
     ensure_demo_events(db, org1, org2)
     ensure_demo_urgent_requests(db, org1, org2)
+    ensure_demo_organization_public_pages(db, org1, org2)
 
     enrich_demo_volunteers(db)
+
+    ensure_demo_plain_users_and_adoption_applications(db)
+    ensure_demo_volunteer_help_responses_lk_mock(db, org1)
+    sync_demo_adoption_applications_for_profile_mock(db)
+    sync_demo_accounts_password(db)
 
     db.commit()
 
 
 def enrich_demo_volunteers(db: Session) -> None:
     ensure_volunteer_competency_items(db)
+    demo_v1_weekly = [
+        {"weekday": "monday", "ranges": [{"start": "16:00", "end": "21:00"}]},
+        {"weekday": "tuesday", "ranges": [{"start": "10:00", "end": "14:00"}]},
+        {"weekday": "wednesday", "ranges": [{"start": "12:00", "end": "15:00"}]},
+        {"weekday": "thursday", "ranges": [{"start": "08:00", "end": "21:00"}]},
+        {"weekday": "friday", "ranges": [{"start": "09:00", "end": "20:00"}]},
+        {"weekday": "saturday", "ranges": [{"start": "09:00", "end": "20:00"}]},
+        {"weekday": "sunday", "ranges": [{"start": "09:00", "end": "20:00"}]},
+    ]
     v1 = db.query(User).filter(User.email == "volunteer1@example.com").first()
     if v1 and v1.volunteer_profile:
         p = v1.volunteer_profile
-        if not p.competency_assignments:
-            _set_volunteer_competency_slugs(db, p.id, ("auto", "photo_video", "walk"))
-        if p.animal_types_json is None:
-            p.animal_types_json = json.dumps(["cat", "dog"], ensure_ascii=False)
+        _set_volunteer_competency_slugs(
+            db,
+            p.id,
+            (
+                "walk",
+                "photo_video",
+                "foster",
+                "texts_social",
+                "manual",
+                "auto",
+                "medical",
+                "rescue",
+            ),
+        )
+        p.animal_types_json = json.dumps(["dog", "cat"], ensure_ascii=False)
         if p.experience_level is None:
             p.experience_level = "experienced"
-        if not p.about_me:
-            p.about_me = (
-                "Занимаюсь волонтёрством более 3 лет. Есть автомобиль для перевозки животных."
-            )
-        if p.rating is None or p.rating == 0:
-            p.rating = 4.9
-        if not p.completed_tasks_count:
-            p.completed_tasks_count = 24
+        p.about_me = (
+            "Ветеринарный техник, 3 года стажа в приюте. Могу ставить капельницы, делать перевязки "
+            "и работать с агрессивными животными. Дома живут две свои собаки."
+        )
+        p.completed_tasks_count = 24
         if p.latitude is None:
             p.latitude = 56.8389
         if p.longitude is None:
             p.longitude = 60.6057
-        if p.location_city is None:
-            p.location_city = "Екатеринбург"
-        if p.travel_radius_km is None:
-            p.travel_radius_km = 30
+        p.location_city = "Екатеринбург"
+        p.location_district = "Кировский район"
+        p.travel_radius_km = 30
+        p.help_format = "recurring"
+        p.has_veterinary_education = False
+        p.accepts_night_urgency = False
+        p.travel_area_mode = "region"
+        p.weekly_availability_json = json.dumps(demo_v1_weekly, ensure_ascii=False)
+        p.is_available = True
         if v1.full_name == "Анна Иванова":
             v1.full_name = "Анна Смирнова"
 
@@ -711,26 +1288,12 @@ def enrich_demo_volunteers(db: Session) -> None:
             p2.animal_types_json = json.dumps(["cat"], ensure_ascii=False)
         if p2.experience_level is None:
             p2.experience_level = "beginner"
-        if p2.rating is None or p2.rating == 0:
-            p2.rating = 4.5
         if not p2.completed_tasks_count:
             p2.completed_tasks_count = 15
         if p2.latitude is None:
             p2.latitude = 59.9343
         if p2.longitude is None:
             p2.longitude = 30.3351
-
-    if not db.query(VolunteerReview.id).first() and v1:
-        db.add(
-            VolunteerReview(
-                volunteer_user_id=v1.id,
-                author_name="Приют «Верный»",
-                author_avatar_path=None,
-                review_date=datetime(2026, 4, 12, 12, 0, 0),
-                rating=5,
-                text="Анна оперативно помогла с транспортом и сделала отличные фото для соцсетей.",
-            )
-        )
 
 
 if __name__ == "__main__":

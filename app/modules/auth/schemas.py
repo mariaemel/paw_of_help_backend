@@ -1,20 +1,39 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
-class RegisterCredentials(BaseModel):
-    email: EmailStr
-    phone: str | None = Field(default=None, max_length=32)
+class LoginRequest(BaseModel):
+    credential: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class RegisterPayloadBase(BaseModel):
+    contact: str = Field(min_length=5, max_length=320, description="E-mail или номер телефона")
+    full_name: str = Field(min_length=1, max_length=255, description="Имя (для организации — контактное лицо, если нужно)")
     password: str = Field(min_length=8, max_length=128)
-    full_name: str | None = Field(default=None, max_length=255)
+    password_confirmation: str = Field(min_length=8, max_length=128)
+    consent_personal_data: Literal[True] = Field(
+        description="Согласие на обработку ПДн (должно быть true)",
+    )
+
+    @model_validator(mode="after")
+    def passwords_and_consent(self):
+        if self.password != self.password_confirmation:
+            raise ValueError("Пароли не совпадают")
+        return self
 
 
-class RegisterUserRequest(RegisterCredentials):
-    bio: str | None = Field(default=None, max_length=5000)
+class RegisterUserRequest(RegisterPayloadBase):
+    pass
 
 
-class RegisterVolunteerRequest(RegisterCredentials):
+class RegisterVolunteerRequest(RegisterPayloadBase):
+    location_city: str | None = Field(default=None, max_length=120, description="Город")
+    has_own_transport: bool = False
+    can_travel_other_area: bool = True
     availability: str | None = Field(default=None, max_length=5000)
-    location_city: str | None = Field(default=None, max_length=120)
     travel_radius_km: int | None = Field(default=None, ge=0, le=5000)
 
 
@@ -29,20 +48,20 @@ class OrganizationVerificationInput(BaseModel):
     comment: str | None = Field(default=None, max_length=5000)
 
 
-class RegisterOrganizationRequest(RegisterCredentials):
-    display_name: str = Field(min_length=2, max_length=255)
+class RegisterOrganizationRequest(RegisterPayloadBase):
+    display_name: str = Field(min_length=2, max_length=255, description="Название организации")
+    organization_type: str = Field(min_length=2, max_length=255, description="Тип организации")
+    city: str = Field(min_length=1, max_length=120, description="Город")
+    request_verification: bool = Field(
+        default=False,
+        description="Запросить верификацию (как переключатель в макете)",
+    )
     legal_name: str | None = Field(default=None, max_length=255)
-    specialization: str | None = Field(default=None, max_length=255)
     work_territory: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=8000)
     admission_rules: str | None = Field(default=None, max_length=8000)
     contacts: list[OrganizationContactInput] = Field(default_factory=list)
     verification: OrganizationVerificationInput | None = None
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
 
 
 class TokenRefreshRequest(BaseModel):
@@ -63,6 +82,7 @@ class UserResponse(BaseModel):
     role: str
     is_email_verified: bool
     is_phone_verified: bool
+    personal_data_consent_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

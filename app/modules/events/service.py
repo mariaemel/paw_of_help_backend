@@ -2,6 +2,7 @@ from fastapi import HTTPException, status
 
 from app.models.event import Event
 from app.models.organization import Organization
+from app.models.user import User, UserRole
 from app.modules.events.repository import EventRepository
 from app.modules.events.schemas import (
     EVENT_HELP_OPTIONS,
@@ -73,17 +74,18 @@ class EventService:
             longitude=event.longitude,
         )
 
-    @staticmethod
-    def _ensure_org_actor(role: str) -> None:
-        if (role or "").strip().lower() != "organization":
+    def _organization_for_user(self, user: User) -> Organization:
+        if user.role != UserRole.ORGANIZATION:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
-
-    @staticmethod
-    def _ensure_organization_owner(org: Organization | None, actor_user_id: int) -> None:
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
         if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        if org.owner_user_id != actor_user_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own events")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
+        return org
 
     @staticmethod
     def _to_detail(event: Event, org: Organization | None) -> EventDetail:
@@ -103,13 +105,11 @@ class EventService:
             longitude=event.longitude,
         )
 
-    def create_event(self, payload: EventCreateRequest) -> EventDetail:
-        self._ensure_org_actor(payload.actor_role)
-        org = self.repo.get_organization(payload.organization_id)
-        self._ensure_organization_owner(org, payload.actor_user_id)
+    def create_event(self, user: User, payload: EventCreateRequest) -> EventDetail:
+        org = self._organization_for_user(user)
 
         event = Event(
-            organization_id=payload.organization_id,
+            organization_id=org.id,
             title=payload.title,
             summary=payload.summary,
             description=payload.description,
@@ -129,13 +129,14 @@ class EventService:
         self.repo.db.refresh(event)
         return self._to_detail(event, org)
 
-    def update_event(self, event_id: int, payload: EventUpdateRequest) -> EventDetail:
-        self._ensure_org_actor(payload.actor_role)
+    def update_event(self, event_id: int, user: User, payload: EventUpdateRequest) -> EventDetail:
+        org = self._organization_for_user(user)
         row = self.repo.get_event_for_owner(event_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        event, org = row
-        self._ensure_organization_owner(org, payload.actor_user_id)
+        event, owner_org = row
+        if owner_org is None or owner_org.id != org.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own events")
 
         for field in (
             "title",
@@ -156,26 +157,28 @@ class EventService:
                 setattr(event, field, value)
         self.repo.db.commit()
         self.repo.db.refresh(event)
-        return self._to_detail(event, org)
+        return self._to_detail(event, owner_org)
 
-    def archive_event(self, event_id: int, actor_user_id: int, actor_role: str) -> EventDetail:
-        self._ensure_org_actor(actor_role)
+    def archive_event(self, event_id: int, user: User) -> EventDetail:
+        org = self._organization_for_user(user)
         row = self.repo.get_event_for_owner(event_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        event, org = row
-        self._ensure_organization_owner(org, actor_user_id)
+        event, owner_org = row
+        if owner_org is None or owner_org.id != org.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own events")
         event.is_archived = True
         self.repo.db.commit()
         self.repo.db.refresh(event)
-        return self._to_detail(event, org)
+        return self._to_detail(event, owner_org)
 
-    def delete_event(self, event_id: int, actor_user_id: int, actor_role: str) -> None:
-        self._ensure_org_actor(actor_role)
+    def delete_event(self, event_id: int, user: User) -> None:
+        org = self._organization_for_user(user)
         row = self.repo.get_event_for_owner(event_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        event, org = row
-        self._ensure_organization_owner(org, actor_user_id)
+        event, owner_org = row
+        if owner_org is None or owner_org.id != org.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own events")
         self.repo.db.delete(event)
         self.repo.db.commit()

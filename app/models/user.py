@@ -1,10 +1,15 @@
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Enum as SqlEnum, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.adoption_application import AnimalAdoptionApplication
+    from app.models.volunteer_help_response import VolunteerHelpResponse
 
 
 class UserRole(str, Enum):
@@ -24,6 +29,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(SqlEnum(UserRole), default=UserRole.USER)
     is_email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     is_phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    personal_data_consent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user_profile: Mapped["UserProfile | None"] = relationship(
@@ -38,9 +44,13 @@ class User(Base):
     verification_tokens: Mapped[list["VerificationToken"]] = relationship(
         "VerificationToken", back_populates="user", cascade="all, delete-orphan"
     )
-    volunteer_reviews_received: Mapped[list["VolunteerReview"]] = relationship(
-        "VolunteerReview",
-        foreign_keys="VolunteerReview.volunteer_user_id",
+    adoption_applications: Mapped[list["AnimalAdoptionApplication"]] = relationship(
+        "AnimalAdoptionApplication",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    volunteer_help_responses: Mapped[list["VolunteerHelpResponse"]] = relationship(
+        "VolunteerHelpResponse",
         back_populates="volunteer",
         cascade="all, delete-orphan",
     )

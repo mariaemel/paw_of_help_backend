@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.volunteer_help_response import VolunteerHelpResponse
 
 
 class HelpRequest(Base):
@@ -21,6 +25,7 @@ class HelpRequest(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     help_type: Mapped[str] = mapped_column(String(40), index=True)
+    urgency_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     volunteer_needed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     volunteer_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -38,3 +43,6 @@ class HelpRequest(Base):
 
     organization = relationship("Organization")
     animal = relationship("Animal", back_populates="help_requests")
+    volunteer_responses: Mapped[list["VolunteerHelpResponse"]] = relationship(
+        "VolunteerHelpResponse", back_populates="help_request", cascade="all, delete-orphan"
+    )

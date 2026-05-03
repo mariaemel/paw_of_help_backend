@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.deps import get_current_user_optional
 from app.db.session import get_db
+from app.models.user import User
 from app.modules.volunteers.repository import VolunteerRepository
 from app.modules.volunteers.schemas import (
     VolunteerCatalogsResponse,
@@ -40,7 +42,7 @@ def list_volunteers(
     offset: int = Query(default=0, ge=0),
     sort_by: str = Query(
         default="name",
-        description="name | city | rating | available_first (сначала свободные)",
+        description="name | city | available_first (сначала свободные, затем по числу задач)",
     ),
     service: VolunteerService = Depends(get_volunteer_service),
 ):
@@ -74,6 +76,10 @@ def volunteer_catalogs(service: VolunteerService = Depends(get_volunteer_service
     return service.get_catalogs()
 
 
-@router.get("/{volunteer_id}", response_model=VolunteerDetail)
-def get_volunteer(volunteer_id: int, service: VolunteerService = Depends(get_volunteer_service)):
-    return service.get_volunteer_detail(volunteer_id)
+@router.get("/{volunteer_id}", response_model=VolunteerDetail, response_model_exclude_none=True)
+def get_volunteer(
+    volunteer_id: int,
+    viewer: User | None = Depends(get_current_user_optional),
+    service: VolunteerService = Depends(get_volunteer_service),
+):
+    return service.get_volunteer_detail(volunteer_id, viewer)

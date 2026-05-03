@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_roles
 from app.db.session import get_db
+from app.models.user import User, UserRole
 from app.modules.animals.repository import AnimalRepository
 from app.modules.animals.schemas import (
     AnimalCatalogsResponse,
@@ -80,6 +82,7 @@ def upload_animal_image(
     animal_id: int,
     file: UploadFile = File(...),
     is_primary: bool = Query(default=False),
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: AnimalService = Depends(get_animal_service),
 ):
-    return service.upload_image(animal_id=animal_id, file=file, is_primary=is_primary)
+    return service.upload_image(animal_id=animal_id, file=file, is_primary=is_primary, user=user)

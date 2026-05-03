@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_roles
 from app.db.session import get_db
+from app.models.user import User, UserRole
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.schemas import (
     UrgentCatalogsResponse,
@@ -57,24 +59,28 @@ def urgent_detail(request_id: int, service: UrgentService = Depends(get_urgent_s
 
 
 @router.post("", response_model=UrgentRequestDetail)
-def create_urgent(payload: UrgentRequestCreate, service: UrgentService = Depends(get_urgent_service)):
-    return service.create_request(payload)
+def create_urgent(
+    payload: UrgentRequestCreate,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
+    service: UrgentService = Depends(get_urgent_service),
+):
+    return service.create_request(user, payload)
 
 
 @router.patch("/{request_id}", response_model=UrgentRequestDetail)
 def update_urgent(
     request_id: int,
     payload: UrgentRequestUpdate,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: UrgentService = Depends(get_urgent_service),
 ):
-    return service.update_request(request_id, payload)
+    return service.update_request(request_id, user, payload)
 
 
 @router.post("/{request_id}/close", response_model=UrgentRequestDetail)
 def close_urgent(
     request_id: int,
-    actor_user_id: int = Query(...),
-    actor_role: str = Query(..., description="organization"),
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
     service: UrgentService = Depends(get_urgent_service),
 ):
-    return service.close_request(request_id, actor_user_id, actor_role)
+    return service.close_request(request_id, user)

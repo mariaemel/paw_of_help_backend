@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.adoption_application import AnimalAdoptionApplication
     from app.models.animal_catalog import AnimalCatalogAssignment
     from app.models.help_request import HelpRequest
     from app.models.organization import Organization
@@ -73,6 +74,9 @@ class Animal(Base):
         cascade="all, delete-orphan",
     )
     help_requests: Mapped[list["HelpRequest"]] = relationship("HelpRequest", back_populates="animal")
+    adoption_applications: Mapped[list["AnimalAdoptionApplication"]] = relationship(
+        "AnimalAdoptionApplication", back_populates="animal", cascade="all, delete-orphan"
+    )
     organization: Mapped[Organization | None] = relationship("Organization", back_populates="animals")
 
 

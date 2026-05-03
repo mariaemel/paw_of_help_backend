@@ -66,8 +66,6 @@ class KnowledgeFilterParams(BaseModel):
 
 
 class KnowledgeUpsertRequest(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="volunteer | organization")
     title: str = Field(min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)
     content: str = Field(min_length=10)
@@ -77,8 +75,6 @@ class KnowledgeUpsertRequest(BaseModel):
 
 
 class KnowledgeUpdateRequest(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="volunteer | organization")
     title: str | None = Field(default=None, min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)
     content: str | None = Field(default=None, min_length=10)

@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.deps import get_current_user
 from app.db.session import get_db
+from app.models.user import User
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import (
     LoginRequest,
@@ -50,10 +52,23 @@ def verify_phone(payload: VerifyPhoneRequest, service: AuthService = Depends(get
 
 
 @router.post("/login", response_model=TokenPairResponse)
-def login(payload: LoginRequest, service: AuthService = Depends(get_auth_service)):
-    return service.login(payload)
+def login(
+    request: Request,
+    payload: LoginRequest,
+    service: AuthService = Depends(get_auth_service),
+):
+    host = request.client.host if request.client else None
+    return service.login(payload, host)
 
 
 @router.post("/refresh", response_model=TokenPairResponse)
 def refresh(payload: TokenRefreshRequest, service: AuthService = Depends(get_auth_service)):
     return service.refresh(payload.refresh_token)
+
+
+@router.get("/me", response_model=UserResponse)
+def me(
+    user: User = Depends(get_current_user),
+    service: AuthService = Depends(get_auth_service),
+):
+    return service.me(user)

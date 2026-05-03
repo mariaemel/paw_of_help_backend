@@ -3,7 +3,8 @@ import math
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.profile import VolunteerProfile, VolunteerReview
+from app.models.knowledge import KnowledgeArticle
+from app.models.profile import VolunteerProfile
 from app.models.user import User, UserRole
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.modules.volunteers.schemas import VolunteerFilterParams
@@ -70,11 +71,19 @@ class VolunteerRepository:
         )
         return row
 
-    def list_reviews(self, volunteer_user_id: int) -> list[VolunteerReview]:
+    def list_published_articles_by_volunteer(
+        self, author_user_id: int, limit: int = 24
+    ) -> list[KnowledgeArticle]:
         return (
-            self.db.query(VolunteerReview)
-            .filter(VolunteerReview.volunteer_user_id == volunteer_user_id)
-            .order_by(VolunteerReview.review_date.desc())
+            self.db.query(KnowledgeArticle)
+            .filter(
+                KnowledgeArticle.author_user_id == author_user_id,
+                KnowledgeArticle.owner_role == "volunteer",
+                KnowledgeArticle.is_published.is_(True),
+                KnowledgeArticle.is_archived.is_(False),
+            )
+            .order_by(KnowledgeArticle.created_at.desc())
+            .limit(limit)
             .all()
         )
 
@@ -143,13 +152,11 @@ class VolunteerRepository:
         sort_by = filters.sort_by or "name"
         if sort_by == "city":
             rows.sort(key=lambda r: (r[1].location_city or "", r[0].id))
-        elif sort_by == "rating":
-            rows.sort(key=lambda r: (-(r[1].rating or 0.0), r[0].full_name or "", r[0].id))
         elif sort_by == "available_first":
             rows.sort(
                 key=lambda r: (
                     not r[1].is_available,
-                    -(r[1].rating or 0.0),
+                    -(r[1].completed_tasks_count or 0),
                     r[0].full_name or "",
                     r[0].id,
                 )

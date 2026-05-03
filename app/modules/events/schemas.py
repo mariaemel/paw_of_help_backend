@@ -75,9 +75,6 @@ class EventFilterParams(BaseModel):
 
 
 class EventCreateRequest(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="organization")
-    organization_id: int
     title: str = Field(min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)
     description: str = Field(min_length=10)
@@ -93,8 +90,6 @@ class EventCreateRequest(BaseModel):
 
 
 class EventUpdateRequest(BaseModel):
-    actor_user_id: int
-    actor_role: str = Field(description="organization")
     title: str | None = Field(default=None, min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, min_length=10)

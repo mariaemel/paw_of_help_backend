@@ -1,6 +1,8 @@
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.models.organization import Organization
+from app.models.user import User, UserRole
 from app.modules.animals.catalog_marks import (
     build_catalog_feature_filter_options,
     combined_catalog_feature_labels,
@@ -145,10 +147,25 @@ class AnimalService:
             created_at=animal.created_at,
         )
 
-    def upload_image(self, animal_id: int, file, is_primary: bool) -> dict:
+    def upload_image(self, animal_id: int, file, is_primary: bool, user: User) -> dict:
+        if user.role != UserRole.ORGANIZATION:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
         animal = self.repo.get_by_id(animal_id)
         if not animal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+        if animal.organization_id != org.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Can only upload images for animals owned by your organization",
+            )
         try:
             file_path = save_animal_image(settings.media_dir, animal_id, file)
         except ValueError as exc:
