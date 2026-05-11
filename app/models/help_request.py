@@ -31,7 +31,6 @@ class HelpRequest(Base):
     volunteer_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     volunteer_competencies_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
-    collected_amount: Mapped[float] = mapped_column(Float, default=0.0)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     deadline_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     media_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

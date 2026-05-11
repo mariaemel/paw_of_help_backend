@@ -178,10 +178,7 @@ class OrganizationRepository:
         return (
             self.db.query(OrganizationHomeStory)
             .filter(OrganizationHomeStory.organization_id == organization_id)
-            .order_by(
-                OrganizationHomeStory.sort_order.asc(),
-                OrganizationHomeStory.adopted_at.desc(),
-            )
+            .order_by(OrganizationHomeStory.adopted_at.desc(), OrganizationHomeStory.id.desc())
             .limit(limit)
             .all()
         )

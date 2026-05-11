@@ -6,7 +6,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.models.adoption_application import AdoptionApplicationStatus, AnimalAdoptionApplication
-from app.models.animal import AnimalStatus
+from app.models.animal import Animal, AnimalStatus
+from app.models.help_request import HelpRequest
+from app.models.organization_home_story import OrganizationHomeStory
+from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
@@ -14,11 +17,19 @@ from app.models.volunteer_help_response_report import VolunteerHelpResponseRepor
 from app.models.user import User, UserRole
 from app.modules.account.repository import AccountRepository
 from app.modules.account import schemas as s
-from app.modules.account.storage import save_profile_avatar
+from app.modules.account.storage import (
+    save_org_asset,
+    save_org_chat_message_photo,
+    save_profile_avatar,
+)
 from app.modules.animals.jsonutil import parse_json_list
 from app.modules.animals.tags import species_label_ru
+from app.modules.organizations.service import OrganizationService
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.urgent.schemas import HELP_TYPE_OPTIONS
+from app.modules.urgent.schemas import UrgentRequestCreate, UrgentRequestDetail, UrgentRequestUpdate
+from app.modules.urgent.repository import UrgentRepository
+from app.modules.urgent.service import UrgentService
 from app.modules.volunteers.constants import (
     ALLOWED_HELP_FORMATS,
     ALLOWED_TRAVEL_AREA_MODES,
@@ -82,6 +93,56 @@ def _primary_photo_url(animal) -> str | None:
     return f"{settings.media_url_prefix}/{primary.file_path}"
 
 
+def _load_social_links(raw: str | None) -> list[s.OrgSocialLinkIn]:
+    if not raw:
+        return []
+    try:
+        arr = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(arr, list):
+        return []
+    out: list[s.OrgSocialLinkIn] = []
+    for row in arr[:3]:
+        if not isinstance(row, dict):
+            continue
+        platform = str(row.get("platform") or row.get("label") or "").strip().lower()
+        if platform in ("вконтакте", "vk.com", "вк"):
+            platform = "vk"
+        elif platform in ("телеграм", "telegram"):
+            platform = "telegram"
+        elif platform in ("whatsapp", "ватсап", "вацап"):
+            platform = "whatsapp"
+        url = str(row.get("url") or "").strip()
+        if platform not in {"vk", "telegram", "whatsapp"} or not url:
+            continue
+        out.append(s.OrgSocialLinkIn(platform=platform, url=url))
+    return out
+
+
+def _parse_gallery(raw: str | None) -> list[dict[str, str | None]]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, str | None]] = []
+    for row in data[:5]:
+        if isinstance(row, str) and row.strip():
+            out.append({"path": row.strip(), "description": None})
+            continue
+        if isinstance(row, dict):
+            p = str(row.get("path") or "").strip()
+            if not p:
+                continue
+            d = row.get("description")
+            out.append({"path": p, "description": (str(d).strip() if d is not None else None)})
+    return out
+
+
 class AccountService:
     def __init__(self, repo: AccountRepository):
         self.repo = repo
@@ -90,6 +151,17 @@ class AccountService:
         if not path:
             return None
         return f"{settings.media_url_prefix}/{path}"
+
+    def _organization_for_user(self, user: User):
+        if user.role != UserRole.ORGANIZATION:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для организаций")
+        org = OrganizationRepository(self.repo.db).get_owned_by_user(user.id)
+        if org is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Организация для пользователя не найдена",
+            )
+        return org
 
     def _competency_pairs(self, profile: VolunteerProfile) -> tuple[list[str], list[str]]:
         assigns = list(profile.competency_assignments or [])
@@ -699,4 +771,720 @@ class AccountService:
             submitted_at=rep.submitted_at,
             org_accepted_at=rep.org_accepted_at,
             org_rejection_reason=rep.org_rejection_reason,
+        )
+
+    def get_org_cabinet_profile(self, user: User) -> s.OrgCabinetProfileResponse:
+        org = self._organization_for_user(user)
+        gallery_entries = _parse_gallery(getattr(org, "gallery_json", None))
+        gallery_items: list[s.OrgGalleryImageItem] = []
+        for item in gallery_entries:
+            p = item.get("path")
+            if not p:
+                continue
+            u = self._media_url(str(p))
+            if not u:
+                continue
+            gallery_items.append(
+                s.OrgGalleryImageItem(
+                    url=u,
+                    description=item.get("description"),
+                )
+            )
+        return s.OrgCabinetProfileResponse(
+            profile=s.OrgCabinetProfileOut(
+                name=org.name,
+                specialization=org.tagline or org.specialization,
+                description=org.description,
+                city=org.city,
+                logo_url=self._media_url(org.logo_path),
+                cover_url=self._media_url(org.cover_path),
+            ),
+            contacts=s.OrgCabinetContactsOut(
+                phone=org.phone,
+                email=org.email,
+                social_links=_load_social_links(org.social_links_json),
+            ),
+            about=s.OrgCabinetAboutOut(
+                history=org.about_html,
+                gallery=gallery_items,
+                inn=org.inn,
+                ogrn=org.ogrn,
+                bank_account=org.bank_account,
+            ),
+            instructions=s.OrgCabinetInstructionsOut(
+                adoption_howto=org.adoption_howto,
+                admission_rules=org.admission_rules,
+            ),
+        )
+
+    def patch_org_cabinet_profile(
+        self, user: User, payload: s.OrgCabinetProfilePatchRequest
+    ) -> s.OrgCabinetProfileResponse:
+        org = self._organization_for_user(user)
+        changed = False
+        if payload.profile is not None:
+            pf = payload.profile
+            if pf.name is not None:
+                org.name = pf.name.strip() or org.name
+                changed = True
+            if pf.specialization is not None:
+                org.tagline = pf.specialization.strip() or None
+                changed = True
+            if pf.description is not None:
+                org.description = pf.description.strip() or None
+                changed = True
+            if pf.city is not None:
+                org.city = pf.city.strip() or None
+                changed = True
+        if payload.contacts is not None:
+            ct = payload.contacts
+            if ct.phone is not None:
+                org.phone = ct.phone.strip() or None
+                changed = True
+            if ct.email is not None:
+                org.email = str(ct.email).strip() or None
+                changed = True
+            if ct.social_links is not None:
+                links = [x.model_dump() for x in ct.social_links[:3]]
+                org.social_links_json = json.dumps(links, ensure_ascii=False)
+                changed = True
+        if payload.about is not None:
+            ab = payload.about
+            if ab.history is not None:
+                org.about_html = ab.history.strip() or None
+                changed = True
+            if ab.gallery is not None:
+                existing = _parse_gallery(org.gallery_json)
+                by_path: dict[str, dict[str, str | None]] = {str(x["path"]): x for x in existing if x.get("path")}
+                for gi in ab.gallery:
+                    rel = gi.url.replace(settings.media_url_prefix + "/", "", 1).strip()
+                    if rel in by_path:
+                        by_path[rel]["description"] = gi.description.strip() if gi.description else None
+                merged: list[dict[str, str | None]] = []
+                for x in existing[:5]:
+                    p = x.get("path")
+                    if not p:
+                        continue
+                    merged.append({"path": str(p), "description": by_path[str(p)].get("description")})
+                org.gallery_json = json.dumps(merged, ensure_ascii=False)
+                changed = True
+            if ab.inn is not None:
+                org.inn = ab.inn.strip() or None
+                changed = True
+            if ab.ogrn is not None:
+                org.ogrn = ab.ogrn.strip() or None
+                changed = True
+            if ab.bank_account is not None:
+                org.bank_account = ab.bank_account.strip() or None
+                changed = True
+        if payload.instructions is not None:
+            ins = payload.instructions
+            if ins.adoption_howto is not None:
+                org.adoption_howto = ins.adoption_howto.strip() or None
+                changed = True
+            if ins.admission_rules is not None:
+                org.admission_rules = ins.admission_rules.strip() or None
+                changed = True
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.db.commit()
+        return self.get_org_cabinet_profile(user)
+
+    def upload_org_logo(self, user: User, file: UploadFile) -> s.OrgAssetUploadResponse:
+        org = self._organization_for_user(user)
+        try:
+            path = save_org_asset(settings.media_dir, org.id, "logo", file, max_size_bytes=2 * 1024 * 1024)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        org.logo_path = path
+        self.repo.db.commit()
+        return s.OrgAssetUploadResponse(url=self._media_url(path) or "")
+
+    def upload_org_cover(self, user: User, file: UploadFile) -> s.OrgAssetUploadResponse:
+        org = self._organization_for_user(user)
+        try:
+            path = save_org_asset(settings.media_dir, org.id, "cover", file, max_size_bytes=5 * 1024 * 1024)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        org.cover_path = path
+        self.repo.db.commit()
+        return s.OrgAssetUploadResponse(url=self._media_url(path) or "")
+
+    def upload_org_gallery_image(
+        self,
+        user: User,
+        file: UploadFile,
+        description: str | None = None,
+    ) -> s.OrgAssetUploadResponse:
+        org = self._organization_for_user(user)
+        existing = _parse_gallery(org.gallery_json)
+        if len(existing) >= 5:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Можно загрузить не более 5 изображений")
+        try:
+            path = save_org_asset(settings.media_dir, org.id, "gallery", file, max_size_bytes=5 * 1024 * 1024)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        existing.append(
+            {
+                "path": path,
+                "description": description.strip() if description and description.strip() else None,
+            }
+        )
+        org.gallery_json = json.dumps(existing[:5], ensure_ascii=False)
+        self.repo.db.commit()
+        gallery_items = [
+            s.OrgGalleryImageItem(
+                url=self._media_url(str(row["path"])) or "",
+                description=row.get("description"),
+            )
+            for row in existing[:5]
+            if row.get("path")
+        ]
+        return s.OrgAssetUploadResponse(
+            url=self._media_url(path) or "",
+            gallery=gallery_items,
+        )
+
+    def get_org_public_preview(self, user: User):
+        org = self._organization_for_user(user)
+        return OrganizationService(OrganizationRepository(self.repo.db)).get_public_page(org.id)
+
+    def _org_owned_animal_item(self, a: Animal) -> s.OrgOwnedAnimalItem:
+        return s.OrgOwnedAnimalItem(
+            id=a.id,
+            name=a.name,
+            species=a.species,
+            age_months=int(a.age_months or 0),
+            status=a.status,
+            is_urgent=bool(a.is_urgent),
+            primary_photo_url=_primary_photo_url(a),
+            created_at=a.created_at,
+        )
+
+    def list_org_animals(self, user: User, q: str | None, limit: int, offset: int) -> s.OrgOwnedAnimalListResponse:
+        org = self._organization_for_user(user)
+        total = self.repo.count_org_animals(org.id, q)
+        rows = self.repo.list_org_animals(org.id, q, limit, offset)
+        return s.OrgOwnedAnimalListResponse(total=total, items=[self._org_owned_animal_item(a) for a in rows])
+
+    def create_org_animal(self, user: User, payload: s.OrgOwnedAnimalCreate) -> s.OrgOwnedAnimalItem:
+        org = self._organization_for_user(user)
+        a = Animal(
+            organization_id=org.id,
+            name=payload.name,
+            species=payload.species,
+            sex=payload.sex,
+            age_months=payload.age_months,
+            breed=payload.breed,
+            status=payload.status,
+            full_description=payload.full_description,
+            location_city=payload.location_city or org.city,
+            is_urgent=payload.is_urgent,
+        )
+        self.repo.db.add(a)
+        self.repo.db.commit()
+        self.repo.db.refresh(a)
+        return self._org_owned_animal_item(a)
+
+    def update_org_animal(self, user: User, animal_id: int, payload: s.OrgOwnedAnimalUpdate) -> s.OrgOwnedAnimalItem:
+        org = self._organization_for_user(user)
+        a = self.repo.get_org_animal(org.id, animal_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
+        changed = False
+        for field in (
+            "name",
+            "status",
+            "age_months",
+            "breed",
+            "full_description",
+            "location_city",
+            "is_urgent",
+        ):
+            if getattr(payload, field) is not None:
+                setattr(a, field, getattr(payload, field))
+                changed = True
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.db.commit()
+        self.repo.db.refresh(a)
+        return self._org_owned_animal_item(a)
+
+    def archive_org_animal(self, user: User, animal_id: int) -> s.OrgOwnedAnimalItem:
+        org = self._organization_for_user(user)
+        a = self.repo.get_org_animal(org.id, animal_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
+        a.status = "archived"
+        self.repo.db.commit()
+        self.repo.db.refresh(a)
+        return self._org_owned_animal_item(a)
+
+    @staticmethod
+    def _help_type_group(help_type: str) -> str:
+        return "fundraising" if help_type in ("financial", "food", "medical") else "volunteer_task"
+
+    def _org_owned_help_item(self, row: HelpRequest) -> s.OrgOwnedHelpRequestItem:
+        return s.OrgOwnedHelpRequestItem(
+            id=row.id,
+            title=row.title,
+            description=row.description or "",
+            type_group=self._help_type_group(row.help_type),
+            help_type=row.help_type,
+            animal_id=row.animal_id,
+            animal_name=row.animal.name if row.animal else None,
+            status=row.status,
+            is_urgent=bool(row.is_urgent),
+            target_amount=row.target_amount,
+            deadline_at=row.deadline_at,
+            deadline_note=row.deadline_note,
+            created_at=row.created_at,
+        )
+
+    def list_org_help_requests(
+        self,
+        user: User,
+        q: str | None,
+        tab: str | None,
+        limit: int,
+        offset: int,
+    ) -> s.OrgOwnedHelpRequestListResponse:
+        org = self._organization_for_user(user)
+        total = self.repo.count_org_help_requests(org.id, q, tab)
+        rows = self.repo.list_org_help_requests(org.id, q, tab, limit, offset)
+        return s.OrgOwnedHelpRequestListResponse(total=total, items=[self._org_owned_help_item(r) for r in rows])
+
+    def create_org_help_request(self, user: User, payload: UrgentRequestCreate) -> UrgentRequestDetail:
+        return UrgentService(UrgentRepository(self.repo.db)).create_request(user, payload)
+
+    def update_org_help_request(
+        self, user: User, request_id: int, payload: UrgentRequestUpdate
+    ) -> UrgentRequestDetail:
+        return UrgentService(UrgentRepository(self.repo.db)).update_request(request_id, user, payload)
+
+    def close_org_help_request(self, user: User, request_id: int) -> UrgentRequestDetail:
+        return UrgentService(UrgentRepository(self.repo.db)).close_request(request_id, user)
+
+    def list_org_incoming_adoptions(
+        self, user: User, q: str | None, status_value: str | None, limit: int, offset: int
+    ) -> s.OrgIncomingAdoptionListResponse:
+        org = self._organization_for_user(user)
+        total = self.repo.count_org_adoption_applications(org.id, q, status_value)
+        rows = self.repo.list_org_adoption_applications(org.id, q, status_value, limit, offset)
+        items = [
+            s.OrgIncomingAdoptionItem(
+                id=r.id,
+                applicant_user_id=r.user_id,
+                applicant_name=(r.user.full_name if r.user else None) or f"Пользователь #{r.user_id}",
+                applicant_email=r.user.email if r.user else "",
+                applicant_phone=r.user.phone if r.user else None,
+                animal_id=r.animal_id,
+                animal_name=r.animal.name if r.animal else "?",
+                created_at=r.created_at,
+                status=r.status,
+                status_label=s.APPLICATION_STATUS_LABELS.get(r.status, r.status),
+                message=r.message,
+            )
+            for r in rows
+        ]
+        return s.OrgIncomingAdoptionListResponse(total=total, items=items)
+
+    def get_org_incoming_adoption(self, user: User, application_id: int) -> s.OrgIncomingAdoptionItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_adoption_application(org.id, application_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Анкета не найдена")
+        return s.OrgIncomingAdoptionItem(
+            id=r.id,
+            applicant_user_id=r.user_id,
+            applicant_name=(r.user.full_name if r.user else None) or f"Пользователь #{r.user_id}",
+            applicant_email=r.user.email if r.user else "",
+            applicant_phone=r.user.phone if r.user else None,
+            animal_id=r.animal_id,
+            animal_name=r.animal.name if r.animal else "?",
+            created_at=r.created_at,
+            status=r.status,
+            status_label=s.APPLICATION_STATUS_LABELS.get(r.status, r.status),
+            message=r.message,
+        )
+
+    def approve_org_incoming_adoption(self, user: User, application_id: int) -> s.OrgIncomingAdoptionItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_adoption_application(org.id, application_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Анкета не найдена")
+        if row.status != AdoptionApplicationStatus.PENDING_REVIEW.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Заявка уже обработана")
+        row.status = AdoptionApplicationStatus.APPROVED.value
+        row.updated_at = datetime.utcnow()
+        self.repo.db.commit()
+        return self.get_org_incoming_adoption(user, application_id)
+
+    def reject_org_incoming_adoption(
+        self, user: User, application_id: int, payload: s.OrgIncomingRejectRequest
+    ) -> s.OrgIncomingAdoptionItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_adoption_application(org.id, application_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Анкета не найдена")
+        if row.status != AdoptionApplicationStatus.PENDING_REVIEW.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Заявка уже обработана")
+        row.status = AdoptionApplicationStatus.REJECTED.value
+        reason = (payload.reason or "").strip()
+        if reason:
+            row.message = reason
+        row.updated_at = datetime.utcnow()
+        self.repo.db.commit()
+        return self.get_org_incoming_adoption(user, application_id)
+
+    def list_org_incoming_volunteer_responses(
+        self, user: User, q: str | None, status_value: str | None, limit: int, offset: int
+    ) -> s.OrgIncomingVolunteerResponseListResponse:
+        org = self._organization_for_user(user)
+        total = self.repo.count_org_volunteer_responses(org.id, q, status_value)
+        rows = self.repo.list_org_volunteer_responses(org.id, q, status_value, limit, offset)
+        items = [
+            s.OrgIncomingVolunteerResponseItem(
+                id=r.id,
+                volunteer_user_id=r.volunteer_user_id,
+                volunteer_name=(r.volunteer.full_name if r.volunteer else None) or f"Волонтёр #{r.volunteer_user_id}",
+                help_request_id=r.help_request_id,
+                help_request_title=r.help_request.title if r.help_request else "?",
+                created_at=r.created_at,
+                status=r.status,
+                status_label=s.VOLUNTEER_RESPONSE_STATUS_LABELS.get(r.status, r.status),
+                message=r.message,
+            )
+            for r in rows
+        ]
+        return s.OrgIncomingVolunteerResponseListResponse(total=total, items=items)
+
+    def get_org_incoming_volunteer_response(self, user: User, response_id: int) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        return s.OrgIncomingVolunteerResponseItem(
+            id=r.id,
+            volunteer_user_id=r.volunteer_user_id,
+            volunteer_name=(r.volunteer.full_name if r.volunteer else None) or f"Волонтёр #{r.volunteer_user_id}",
+            help_request_id=r.help_request_id,
+            help_request_title=r.help_request.title if r.help_request else "?",
+            created_at=r.created_at,
+            status=r.status,
+            status_label=s.VOLUNTEER_RESPONSE_STATUS_LABELS.get(r.status, r.status),
+            message=r.message,
+        )
+
+    def accept_org_incoming_volunteer_response(self, user: User, response_id: int) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        if r.status != VolunteerHelpResponseStatus.PENDING.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отклик уже обработан")
+        r.status = VolunteerHelpResponseStatus.ACCEPTED.value
+        r.updated_at = datetime.utcnow()
+        self.repo.db.commit()
+        return self.get_org_incoming_volunteer_response(user, response_id)
+
+    def reject_org_incoming_volunteer_response(
+        self, user: User, response_id: int, payload: s.OrgIncomingRejectRequest
+    ) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        if r.status != VolunteerHelpResponseStatus.PENDING.value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отклик уже обработан")
+        r.status = VolunteerHelpResponseStatus.REJECTED.value
+        reason = (payload.reason or "").strip()
+        if reason:
+            r.message = reason
+        r.updated_at = datetime.utcnow()
+        self.repo.db.commit()
+        return self.get_org_incoming_volunteer_response(user, response_id)
+
+    def _dialog_item(self, row) -> s.OrgCommsDialogItem:
+        return s.OrgCommsDialogItem(
+            id=row.id,
+            participant_name=row.participant_name,
+            participant_avatar_url=self._media_url(row.participant_avatar_path),
+            context_type=row.context_type,
+            context_entity_id=row.context_entity_id,
+            context_title=row.context_title,
+            last_message_preview=row.last_message_preview,
+            last_message_at=row.last_message_at,
+            unread_count=int(row.unread_count_org or 0),
+        )
+
+    def list_org_dialogs(
+        self,
+        user: User,
+        q: str | None,
+        limit: int,
+        offset: int,
+    ) -> s.OrgCommsDialogListResponse:
+        org = self._organization_for_user(user)
+        total, unread_total, rows = self.repo.list_org_dialogs(org.id, q, limit, offset)
+        return s.OrgCommsDialogListResponse(
+            total=total,
+            unread_total=unread_total,
+            items=[self._dialog_item(r) for r in rows],
+        )
+
+    def get_org_dialog(self, user: User, dialog_id: int) -> s.OrgCommsDialogDetail:
+        org = self._organization_for_user(user)
+        dialog = self.repo.get_org_dialog(org.id, dialog_id)
+        if dialog is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        messages = self.repo.list_org_dialog_messages(dialog.id)
+        out_messages = [
+            s.OrgCommsMessageItem(
+                id=m.id,
+                sender_user_id=m.sender_user_id,
+                sender_role=m.sender_role,
+                body=m.body,
+                photo_url=self._media_url(m.photo_path),
+                created_at=m.created_at,
+                is_outgoing=(m.sender_role == UserRole.ORGANIZATION.value and m.sender_user_id == user.id),
+            )
+            for m in messages
+        ]
+        self.repo.mark_dialog_messages_read_by_org(dialog.id)
+        self.repo.db.commit()
+        self.repo.db.refresh(dialog)
+        hint = None
+        if dialog.context_title:
+            hint = f"Контекст диалога: {dialog.context_title}"
+        return s.OrgCommsDialogDetail(
+            dialog=self._dialog_item(dialog),
+            context_hint=hint,
+            messages=out_messages,
+        )
+
+    @staticmethod
+    def _comms_preview_text(body_plain: str, has_photo: bool) -> str:
+        t = (body_plain or "").strip()
+        photo_tag = " · фото"
+        if t and has_photo:
+            remain = 500 - len(photo_tag)
+            if remain < 1:
+                return photo_tag.strip()
+            if len(t) > remain:
+                t = t[: max(remain - 1, 1)].rstrip() + "…"
+            return t + photo_tag
+        if t:
+            return t
+        if has_photo:
+            return "Фото"
+        return ""
+
+    def create_org_dialog_message(
+        self,
+        user: User,
+        dialog_id: int,
+        body: str,
+        image: UploadFile | None,
+    ) -> s.OrgCommsMessageItem:
+        org = self._organization_for_user(user)
+        dialog = self.repo.get_org_dialog(org.id, dialog_id)
+        if dialog is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        text_raw = body or ""
+        if len(text_raw) > 8000:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текст не длиннее 8000 символов")
+        text = text_raw.strip()
+        wants_file = image is not None and bool(getattr(image, "filename", None))
+        if not text and not wants_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите текст сообщения или прикрепите изображение",
+            )
+
+        photo_path: str | None = None
+        if wants_file:
+            try:
+                photo_path = save_org_chat_message_photo(
+                    settings.media_dir,
+                    org.id,
+                    dialog.id,
+                    image,
+                    max_size_bytes=5 * 1024 * 1024,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        body_stored = text if text else ("" if photo_path else text)
+        msg = self.repo.create_org_message(
+            dialog_id=dialog.id,
+            sender_user_id=user.id,
+            sender_role=UserRole.ORGANIZATION.value,
+            body=body_stored,
+            photo_path=photo_path,
+        )
+        preview = self._comms_preview_text(body_stored, bool(photo_path))
+        self.repo.update_dialog_last_message(dialog, preview, msg.created_at)
+        self.repo.db.commit()
+        self.repo.db.refresh(msg)
+        return s.OrgCommsMessageItem(
+            id=msg.id,
+            sender_user_id=msg.sender_user_id,
+            sender_role=msg.sender_role,
+            body=msg.body,
+            photo_url=self._media_url(msg.photo_path),
+            created_at=msg.created_at,
+            is_outgoing=True,
+        )
+
+    @staticmethod
+    def _org_report_item(r: OrganizationReport) -> s.OrgReportItem:
+        return s.OrgReportItem(
+            id=r.id,
+            title=r.title,
+            summary=r.summary,
+            body=r.body,
+            detail_url=r.detail_url,
+            published_at=r.published_at,
+            is_published=bool(r.is_published),
+        )
+
+    def list_org_reports(self, user: User, limit: int, offset: int) -> s.OrgReportListResponse:
+        org = self._organization_for_user(user)
+        total, rows = self.repo.list_org_reports(org.id, limit, offset)
+        return s.OrgReportListResponse(total=total, items=[self._org_report_item(r) for r in rows])
+
+    def create_org_report(self, user: User, payload: s.OrgReportCreate) -> s.OrgReportItem:
+        org = self._organization_for_user(user)
+        row = OrganizationReport(
+            organization_id=org.id,
+            title=payload.title,
+            summary=payload.summary,
+            body=payload.body,
+            detail_url=payload.detail_url,
+            published_at=payload.published_at or datetime.utcnow(),
+            is_published=payload.is_published,
+        )
+        self.repo.db.add(row)
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_report_item(row)
+
+    def update_org_report(self, user: User, report_id: int, payload: s.OrgReportUpdate) -> s.OrgReportItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_report(org.id, report_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отчёт не найден")
+        changed = False
+        for field in ("title", "summary", "body", "detail_url", "published_at", "is_published"):
+            value = getattr(payload, field)
+            if value is not None:
+                setattr(row, field, value)
+                changed = True
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_report_item(row)
+
+    def delete_org_report(self, user: User, report_id: int) -> None:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_report(org.id, report_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отчёт не найден")
+        self.repo.db.delete(row)
+        self.repo.db.commit()
+
+    def _org_home_story_item(self, row: OrganizationHomeStory) -> s.OrgHomeStoryItem:
+        return s.OrgHomeStoryItem(
+            id=row.id,
+            animal_name=row.animal_name,
+            story=row.story,
+            photo_url=self._media_url(row.photo_path),
+            adopted_at=row.adopted_at,
+        )
+
+    def list_org_home_stories(self, user: User, limit: int, offset: int) -> s.OrgHomeStoryListResponse:
+        org = self._organization_for_user(user)
+        total, rows = self.repo.list_org_home_stories(org.id, limit, offset)
+        return s.OrgHomeStoryListResponse(total=total, items=[self._org_home_story_item(r) for r in rows])
+
+    def create_org_home_story(self, user: User, payload: s.OrgHomeStoryCreate) -> s.OrgHomeStoryItem:
+        org = self._organization_for_user(user)
+        row = OrganizationHomeStory(
+            organization_id=org.id,
+            animal_name=payload.animal_name,
+            story=payload.story,
+            photo_path=payload.photo_path,
+            adopted_at=payload.adopted_at,
+        )
+        self.repo.db.add(row)
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_home_story_item(row)
+
+    def update_org_home_story(self, user: User, story_id: int, payload: s.OrgHomeStoryUpdate) -> s.OrgHomeStoryItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_home_story(org.id, story_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="История не найдена")
+        changed = False
+        for field in ("animal_name", "story", "photo_path", "adopted_at"):
+            value = getattr(payload, field)
+            if value is not None:
+                setattr(row, field, value)
+                changed = True
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_home_story_item(row)
+
+    def delete_org_home_story(self, user: User, story_id: int) -> None:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_home_story(org.id, story_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="История не найдена")
+        self.repo.db.delete(row)
+        self.repo.db.commit()
+
+    def list_org_events(self, user: User, limit: int, offset: int) -> s.OrgEventListResponse:
+        org = self._organization_for_user(user)
+        total, rows = self.repo.list_org_events(org.id, limit, offset)
+        return s.OrgEventListResponse(
+            total=total,
+            items=[
+                s.OrgEventItem(
+                    id=r.id,
+                    title=r.title,
+                    city=r.city,
+                    address=r.address,
+                    starts_at=r.starts_at,
+                    ends_at=r.ends_at,
+                    is_published=bool(r.is_published),
+                    is_archived=bool(r.is_archived),
+                )
+                for r in rows
+            ],
+        )
+
+    def list_org_articles(self, user: User, limit: int, offset: int) -> s.OrgArticleListResponse:
+        org = self._organization_for_user(user)
+        if org.owner_user_id is None:
+            return s.OrgArticleListResponse(total=0, items=[])
+        total, rows = self.repo.list_org_articles(int(org.owner_user_id), limit, offset)
+        return s.OrgArticleListResponse(
+            total=total,
+            items=[
+                s.OrgArticleItem(
+                    id=r.id,
+                    title=r.title,
+                    category=r.category,
+                    read_minutes=r.read_minutes,
+                    is_published=bool(r.is_published),
+                    is_archived=bool(r.is_archived),
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ],
         )

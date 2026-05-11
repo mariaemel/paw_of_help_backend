@@ -77,8 +77,15 @@ def _gallery_urls(raw: str | None) -> list[str]:
         return []
     urls: list[str] = []
     for p in data[:5]:
+        rel: str | None = None
         if isinstance(p, str) and p.strip():
-            u = _media_url(p.strip())
+            rel = p.strip()
+        elif isinstance(p, dict):
+            path_v = p.get("path")
+            if isinstance(path_v, str) and path_v.strip():
+                rel = path_v.strip()
+        if rel:
+            u = _media_url(rel)
             if u:
                 urls.append(u)
     return urls
@@ -112,38 +119,9 @@ def _ward_status_label(code: str) -> str:
     return WARD_STATUS_PUBLIC_LABELS.get(code, code)
 
 
-def _normalize_city_public(city: str | None) -> str | None:
-    t = (city or "").strip()
-    if not t:
-        return None
-    tl = t.lower()
-    if tl == "москва":
-        return "Екатеринбург"
-    return t
-
-
-def _public_region_for_city(city: str | None, region: str | None) -> str | None:
-    c = _normalize_city_public(city)
-    r_raw = (region or "").strip() or None
-    if c and c.lower() == "екатеринбург":
-        rl = (r_raw or "").lower()
-        if not r_raw or rl == "екатеринбург":
-            return "Свердловская область"
-        if "свердловск" in rl:
-            return "Свердловская область"
-    return r_raw
-
-
-def _public_city_region(city: str | None, region: str | None) -> tuple[str | None, str | None]:
-    c_out = _normalize_city_public(city)
-    r_out = _public_region_for_city(city, region)
-    return c_out, r_out
-
-
 def _geography_display(city: str | None, region: str | None, address: str | None) -> str | None:
-    c, r = _public_city_region(city, region)
-    c = (c or "").strip()
-    r = (r or "").strip()
+    c = (city or "").strip()
+    r = (region or "").strip()
     parts: list[str] = []
     for x in (c, r):
         if x and x not in parts:
@@ -214,7 +192,8 @@ class OrganizationService:
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
-        city_out, region_out = _public_city_region(org.city, org.region)
+        city_out = (org.city or "").strip() or None
+        region_out = (org.region or "").strip() or None
         geography_display = _geography_display(org.city, org.region, org.address)
 
         hero = OrgPublicHero(

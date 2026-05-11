@@ -4,6 +4,11 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.models.adoption_application import AnimalAdoptionApplication
 from app.models.animal import Animal
 from app.models.help_request import HelpRequest
+from app.models.org_chat import OrgChatDialog, OrgChatMessage
+from app.models.event import Event
+from app.models.knowledge import KnowledgeArticle
+from app.models.organization_home_story import OrganizationHomeStory
+from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
 from app.models.user import User
 from app.models.volunteer_competency import VolunteerCompetencyAssignment
@@ -190,3 +195,364 @@ class AccountRepository:
             .filter(HelpRequest.id == help_request_id)
             .first()
         )
+
+    def get_owned_organization(self, owner_user_id: int):
+        from app.models.organization import Organization
+
+        return (
+            self.db.query(Organization)
+            .filter(Organization.owner_user_id == owner_user_id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+
+    def count_org_animals(self, organization_id: int, q: str | None) -> int:
+        query = self.db.query(Animal).filter(Animal.organization_id == organization_id)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(func.lower(Animal.name).like(like))
+        return int(query.count() or 0)
+
+    def list_org_animals(self, organization_id: int, q: str | None, limit: int, offset: int) -> list[Animal]:
+        query = (
+            self.db.query(Animal)
+            .options(joinedload(Animal.photos))
+            .filter(Animal.organization_id == organization_id)
+        )
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(func.lower(Animal.name).like(like))
+        return (
+            query.order_by(Animal.created_at.desc(), Animal.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def get_org_animal(self, organization_id: int, animal_id: int) -> Animal | None:
+        return (
+            self.db.query(Animal)
+            .options(joinedload(Animal.photos))
+            .filter(Animal.organization_id == organization_id, Animal.id == animal_id)
+            .first()
+        )
+
+    def count_org_help_requests(self, organization_id: int, q: str | None, type_group: str | None) -> int:
+        query = self.db.query(HelpRequest).filter(HelpRequest.organization_id == organization_id)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(HelpRequest.title).like(like),
+                    func.lower(HelpRequest.description).like(like),
+                )
+            )
+        if type_group == "fundraising":
+            query = query.filter(HelpRequest.help_type.in_(("financial", "food", "medical")))
+        elif type_group == "volunteer_task":
+            query = query.filter(~HelpRequest.help_type.in_(("financial", "food", "medical")))
+        return int(query.count() or 0)
+
+    def list_org_help_requests(
+        self, organization_id: int, q: str | None, type_group: str | None, limit: int, offset: int
+    ) -> list[HelpRequest]:
+        query = (
+            self.db.query(HelpRequest)
+            .options(joinedload(HelpRequest.animal))
+            .filter(HelpRequest.organization_id == organization_id)
+        )
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(HelpRequest.title).like(like),
+                    func.lower(HelpRequest.description).like(like),
+                )
+            )
+        if type_group == "fundraising":
+            query = query.filter(HelpRequest.help_type.in_(("financial", "food", "medical")))
+        elif type_group == "volunteer_task":
+            query = query.filter(~HelpRequest.help_type.in_(("financial", "food", "medical")))
+        return (
+            query.order_by(HelpRequest.created_at.desc(), HelpRequest.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def count_org_adoption_applications(self, organization_id: int, q: str | None, status_value: str | None) -> int:
+        query = (
+            self.db.query(AnimalAdoptionApplication)
+            .join(Animal, Animal.id == AnimalAdoptionApplication.animal_id)
+            .join(User, User.id == AnimalAdoptionApplication.user_id)
+            .filter(Animal.organization_id == organization_id)
+        )
+        if status_value and status_value != "all":
+            query = query.filter(AnimalAdoptionApplication.status == status_value)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(User.full_name).like(like),
+                    func.lower(Animal.name).like(like),
+                )
+            )
+        return int(query.count() or 0)
+
+    def list_org_adoption_applications(
+        self, organization_id: int, q: str | None, status_value: str | None, limit: int, offset: int
+    ) -> list[AnimalAdoptionApplication]:
+        query = (
+            self.db.query(AnimalAdoptionApplication)
+            .options(
+                joinedload(AnimalAdoptionApplication.user),
+                joinedload(AnimalAdoptionApplication.animal),
+            )
+            .join(Animal, Animal.id == AnimalAdoptionApplication.animal_id)
+            .join(User, User.id == AnimalAdoptionApplication.user_id)
+            .filter(Animal.organization_id == organization_id)
+        )
+        if status_value and status_value != "all":
+            query = query.filter(AnimalAdoptionApplication.status == status_value)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(User.full_name).like(like),
+                    func.lower(Animal.name).like(like),
+                )
+            )
+        return (
+            query.order_by(AnimalAdoptionApplication.created_at.desc(), AnimalAdoptionApplication.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def get_org_adoption_application(
+        self, organization_id: int, application_id: int
+    ) -> AnimalAdoptionApplication | None:
+        return (
+            self.db.query(AnimalAdoptionApplication)
+            .options(
+                joinedload(AnimalAdoptionApplication.user),
+                joinedload(AnimalAdoptionApplication.animal),
+            )
+            .join(Animal, Animal.id == AnimalAdoptionApplication.animal_id)
+            .filter(
+                Animal.organization_id == organization_id,
+                AnimalAdoptionApplication.id == application_id,
+            )
+            .first()
+        )
+
+    def count_org_volunteer_responses(self, organization_id: int, q: str | None, status_value: str | None) -> int:
+        query = (
+            self.db.query(VolunteerHelpResponse)
+            .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
+            .join(User, User.id == VolunteerHelpResponse.volunteer_user_id)
+            .filter(HelpRequest.organization_id == organization_id)
+        )
+        if status_value and status_value != "all":
+            query = query.filter(VolunteerHelpResponse.status == status_value)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(User.full_name).like(like),
+                    func.lower(HelpRequest.title).like(like),
+                )
+            )
+        return int(query.count() or 0)
+
+    def list_org_volunteer_responses(
+        self, organization_id: int, q: str | None, status_value: str | None, limit: int, offset: int
+    ) -> list[VolunteerHelpResponse]:
+        query = (
+            self.db.query(VolunteerHelpResponse)
+            .options(
+                joinedload(VolunteerHelpResponse.volunteer),
+                joinedload(VolunteerHelpResponse.help_request),
+            )
+            .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
+            .join(User, User.id == VolunteerHelpResponse.volunteer_user_id)
+            .filter(HelpRequest.organization_id == organization_id)
+        )
+        if status_value and status_value != "all":
+            query = query.filter(VolunteerHelpResponse.status == status_value)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(User.full_name).like(like),
+                    func.lower(HelpRequest.title).like(like),
+                )
+            )
+        return (
+            query.order_by(VolunteerHelpResponse.created_at.desc(), VolunteerHelpResponse.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def get_org_volunteer_response(self, organization_id: int, response_id: int) -> VolunteerHelpResponse | None:
+        return (
+            self.db.query(VolunteerHelpResponse)
+            .options(
+                joinedload(VolunteerHelpResponse.volunteer),
+                joinedload(VolunteerHelpResponse.help_request),
+                joinedload(VolunteerHelpResponse.report),
+            )
+            .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
+            .filter(
+                HelpRequest.organization_id == organization_id,
+                VolunteerHelpResponse.id == response_id,
+            )
+            .first()
+        )
+
+    def list_org_dialogs(self, organization_id: int, q: str | None, limit: int, offset: int):
+        query = self.db.query(OrgChatDialog).filter(OrgChatDialog.organization_id == organization_id)
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(OrgChatDialog.participant_name).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.context_title, "")).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.last_message_preview, "")).like(like),
+                )
+            )
+        total = query.count()
+        rows = (
+            query.order_by(
+                OrgChatDialog.last_message_at.desc().nullslast(),
+                OrgChatDialog.updated_at.desc(),
+                OrgChatDialog.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        unread_total = int(
+            self.db.query(func.coalesce(func.sum(OrgChatDialog.unread_count_org), 0))
+            .filter(OrgChatDialog.organization_id == organization_id)
+            .scalar()
+            or 0
+        )
+        return total, unread_total, rows
+
+    def get_org_dialog(self, organization_id: int, dialog_id: int) -> OrgChatDialog | None:
+        return (
+            self.db.query(OrgChatDialog)
+            .filter(
+                OrgChatDialog.organization_id == organization_id,
+                OrgChatDialog.id == dialog_id,
+            )
+            .first()
+        )
+
+    def list_org_dialog_messages(self, dialog_id: int, limit: int = 150) -> list[OrgChatMessage]:
+        return (
+            self.db.query(OrgChatMessage)
+            .filter(OrgChatMessage.dialog_id == dialog_id)
+            .order_by(OrgChatMessage.created_at.asc(), OrgChatMessage.id.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def mark_dialog_messages_read_by_org(self, dialog_id: int) -> None:
+        now_expr = func.datetime("now")
+        self.db.query(OrgChatMessage).filter(
+            OrgChatMessage.dialog_id == dialog_id,
+            OrgChatMessage.read_by_org_at.is_(None),
+            OrgChatMessage.sender_role != "organization",
+        ).update({OrgChatMessage.read_by_org_at: now_expr}, synchronize_session=False)
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_org: 0}, synchronize_session=False
+        )
+
+    def create_org_message(
+        self,
+        dialog_id: int,
+        sender_user_id: int,
+        sender_role: str,
+        body: str,
+        photo_path: str | None = None,
+    ) -> OrgChatMessage:
+        msg = OrgChatMessage(
+            dialog_id=dialog_id,
+            sender_user_id=sender_user_id,
+            sender_role=sender_role,
+            body=body,
+            photo_path=photo_path,
+        )
+        self.db.add(msg)
+        self.db.flush()
+        return msg
+
+    def update_dialog_last_message(self, dialog: OrgChatDialog, preview: str, created_at) -> None:
+        p = preview.strip()
+        if len(p) > 500:
+            p = p[:499].rstrip() + "…"
+        dialog.last_message_preview = p or None
+        dialog.last_message_at = created_at
+
+    def list_org_reports(self, organization_id: int, limit: int, offset: int) -> tuple[int, list[OrganizationReport]]:
+        query = self.db.query(OrganizationReport).filter(OrganizationReport.organization_id == organization_id)
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(OrganizationReport.published_at.desc(), OrganizationReport.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows
+
+    def get_org_report(self, organization_id: int, report_id: int) -> OrganizationReport | None:
+        return (
+            self.db.query(OrganizationReport)
+            .filter(OrganizationReport.organization_id == organization_id, OrganizationReport.id == report_id)
+            .first()
+        )
+
+    def list_org_home_stories(
+        self, organization_id: int, limit: int, offset: int
+    ) -> tuple[int, list[OrganizationHomeStory]]:
+        query = self.db.query(OrganizationHomeStory).filter(OrganizationHomeStory.organization_id == organization_id)
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(OrganizationHomeStory.adopted_at.desc(), OrganizationHomeStory.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows
+
+    def get_org_home_story(self, organization_id: int, story_id: int) -> OrganizationHomeStory | None:
+        return (
+            self.db.query(OrganizationHomeStory)
+            .filter(OrganizationHomeStory.organization_id == organization_id, OrganizationHomeStory.id == story_id)
+            .first()
+        )
+
+    def list_org_events(self, organization_id: int, limit: int, offset: int) -> tuple[int, list[Event]]:
+        query = self.db.query(Event).filter(Event.organization_id == organization_id)
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(Event.starts_at.desc(), Event.id.desc()).offset(offset).limit(limit).all()
+        )
+        return total, rows
+
+    def list_org_articles(self, owner_user_id: int, limit: int, offset: int) -> tuple[int, list[KnowledgeArticle]]:
+        query = self.db.query(KnowledgeArticle).filter(
+            KnowledgeArticle.author_user_id == owner_user_id,
+            KnowledgeArticle.owner_role == "organization",
+        )
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows

@@ -17,6 +17,7 @@ from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerH
 from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
 from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
+from app.models.org_chat import OrgChatDialog, OrgChatMessage
 from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
@@ -27,6 +28,12 @@ from app.modules.volunteers.constants import COMPETENCY_OPTIONS
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SEED_ANIMAL_IMAGES_DIR = _REPO_ROOT / "seed_images" / "animals"
 _SEED_URGENT_IMAGES_DIR = _REPO_ROOT / "seed_images" / "urgent"
+_SEED_ORG1_GALLERY_DIR = _REPO_ROOT / "seed_images" / "org1_gallery"
+_ORG1_GALLERY_SEED_FILES: tuple[str, ...] = (
+    "org1_gallery_1.png",
+    "org1_gallery_2.png",
+    "org1_gallery_3.png",
+)
 
 _DEMO_ANIMAL_PHOTOS: dict[str, list[tuple[str, bool]]] = {
     "Муся": [("demo_animals/musya.png", True)],
@@ -59,6 +66,19 @@ def _materialize_seed_urgent_images() -> bool:
     for name in required:
         shutil.copy2(_SEED_URGENT_IMAGES_DIR / name, dest / name)
     return True
+
+
+def _materialize_org1_gallery_images() -> list[str]:
+    dest = Path(settings.media_dir) / "demo_org1_gallery"
+    dest.mkdir(parents=True, exist_ok=True)
+    rel_paths: list[str] = []
+    for name in _ORG1_GALLERY_SEED_FILES:
+        src = _SEED_ORG1_GALLERY_DIR / name
+        if not src.is_file():
+            continue
+        shutil.copy2(src, dest / name)
+        rel_paths.append(f"demo_org1_gallery/{name}")
+    return rel_paths
 
 
 def _sync_demo_animal_photos(db: Session, animal: Animal, photos_ready: bool) -> None:
@@ -489,7 +509,6 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "volunteer_requirements": None,
             "volunteer_competencies_json": "[]",
             "target_amount": 15000.0,
-            "collected_amount": 0.0,
             "deadline_at": datetime(2026, 5, 3, 23, 0, 0),
             "deadline_note": None,
             "media_path": None,
@@ -510,7 +529,6 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "volunteer_requirements": None,
             "volunteer_competencies_json": "[]",
             "target_amount": 5000.0,
-            "collected_amount": 0.0,
             "deadline_at": None,
             "deadline_note": None,
             "media_path": None,
@@ -531,7 +549,6 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "volunteer_requirements": None,
             "volunteer_competencies_json": "[]",
             "target_amount": 3000.0,
-            "collected_amount": 0.0,
             "deadline_at": None,
             "deadline_note": None,
             "media_path": None,
@@ -552,7 +569,6 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "volunteer_requirements": "Нужен водитель с опытом перевозки животных.",
             "volunteer_competencies_json": json.dumps(["auto", "medical"], ensure_ascii=False),
             "target_amount": None,
-            "collected_amount": 0.0,
             "deadline_at": datetime(2026, 5, 2, 15, 0, 0),
             "deadline_note": None,
             "media_path": None,
@@ -573,7 +589,6 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "volunteer_requirements": "Желателен опыт передержки и ухода за котятами.",
             "volunteer_competencies_json": json.dumps(["foster", "medical"], ensure_ascii=False),
             "target_amount": None,
-            "collected_amount": 0.0,
             "deadline_at": datetime(2026, 5, 2, 10, 0, 0),
             "deadline_note": "Забрать нужно сегодня или завтра утром",
             "media_path": "demo_urgent/kittens_basement.png" if urgent_photos_ready else None,
@@ -607,8 +622,15 @@ def _sync_help_demo_animal_links(db: Session) -> None:
 
 
 _DEMO_LK_TRANSPORT_DESCRIPTION = (
-    "Срочно нужна перевозка кота Василия в ветклинику на ул. Малышева. "
-    "Требуется аккуратная транспортировка после операции"
+    "Кошке Мусе требуется поездка в ветеринарную клинику на операцию. "
+    "Самостоятельно доставить животное нет возможности, поэтому ищем волонтера с машиной. "
+    "Муся спокойная, находится в переноске.\n\n"
+    "Маршрут:\n"
+    "• Откуда: Передержка, ул. Ленина, 10\n"
+    '• Куда: Ветклиника «Айболит», ул. Мира, 25\n\n'
+    "Что нужно сделать: забрать животное с передержки -> аккуратно перевезти в клинику -> передать "
+    "сотрудникам.\n\n"
+    "Дополнительно: переноска предоставляется."
 )
 
 
@@ -620,6 +642,7 @@ def _migrate_lk_demo_help_request_titles(
     today_17: datetime,
     today_17b: datetime,
     may7_12: datetime,
+    musya_id: int | None,
 ) -> None:
     rows = (
         db.query(VolunteerHelpResponse)
@@ -627,12 +650,16 @@ def _migrate_lk_demo_help_request_titles(
         .filter(VolunteerHelpResponse.volunteer_user_id == volunteer_user_id)
         .all()
     )
-    desc = _DEMO_LK_TRANSPORT_DESCRIPTION.strip()
     for row in rows:
         hr = row.help_request
         if hr is None or hr.organization_id != organization_id:
             continue
-        if (hr.description or "").strip() != desc:
+        if hr.help_type != "auto":
+            continue
+        if musya_id is not None:
+            if hr.animal_id != musya_id:
+                continue
+        elif hr.title != demo_title:
             continue
         if row.status == VolunteerHelpResponseStatus.PENDING.value:
             hr.title = demo_title
@@ -650,6 +677,34 @@ def _migrate_lk_demo_help_request_titles(
             hr.title = demo_title
             hr.is_urgent = False
             hr.deadline_at = today_17b
+
+
+def _sync_demo_transport_lk_requests_copy(
+    db: Session,
+    org_id: int,
+    demo_title: str,
+    animal_id: int | None,
+) -> None:
+    """Обновляет описание по макету для всех демо-заявок «Перевозка», в т.ч. старых записей без совпадения deadline."""
+    rows = (
+        db.query(HelpRequest)
+        .filter(
+            HelpRequest.organization_id == org_id,
+            HelpRequest.title == demo_title,
+            HelpRequest.help_type == "auto",
+        )
+        .all()
+    )
+    targets = rows if animal_id is None else [hr for hr in rows if hr.animal_id == animal_id]
+    for hr in targets:
+        hr.description = _DEMO_LK_TRANSPORT_DESCRIPTION
+        hr.volunteer_requirements = (
+            "Нужен волонтёр с автомобилем и опытом перевозки животных."
+        )
+        if hr.is_urgent:
+            hr.deadline_note = "Сегодня, 17:00"
+        elif (hr.deadline_note or "").strip() == "Сегодня, 17:00":
+            hr.deadline_note = None
 
 
 def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization) -> None:
@@ -673,7 +728,7 @@ def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization
             "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
             "is_urgent": True,
             "deadline_at": today_17,
-            "deadline_note": None,
+            "deadline_note": "Сегодня, 17:00",
         },
         {
             "description": _DEMO_LK_TRANSPORT_DESCRIPTION,
@@ -703,7 +758,7 @@ def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization
     )
 
     _migrate_lk_demo_help_request_titles(
-        db, v.id, org1.id, demo_title, today_17, today_17b, may7_12
+        db, v.id, org1.id, demo_title, today_17, today_17b, may7_12, musya.id if musya else None
     )
 
     for spec, resp_status in zip(hr_specs, response_statuses):
@@ -728,10 +783,9 @@ def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization
             "help_type": "auto",
             "is_urgent": spec["is_urgent"],
             "volunteer_needed": True,
-            "volunteer_requirements": "Нужен аккуратный перевозчик с опытом.",
+            "volunteer_requirements": "Нужен волонтёр с автомобилем и опытом перевозки животных.",
             "volunteer_competencies_json": json.dumps(["auto"], ensure_ascii=False),
             "target_amount": None,
-            "collected_amount": 0.0,
             "deadline_at": spec["deadline_at"],
             "deadline_note": spec["deadline_note"],
             "media_path": None,
@@ -781,7 +835,7 @@ def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization
             submitted = now - timedelta(days=1)
             accepted = now - timedelta(hours=3)
             body = (
-                "Кота Василия доставили в клинику на ул. Малышева, врач принял, состояние стабильное."
+                "Мусю доставили в ветклинику «Айболит» на ул. Мира, врач принял животное, состояние стабильное."
             )
             if rep is None:
                 db.add(
@@ -798,6 +852,9 @@ def ensure_demo_volunteer_help_responses_lk_mock(db: Session, org1: Organization
                 rep.submitted_at = submitted
                 rep.org_accepted_at = accepted
                 rep.org_rejection_reason = None
+
+    musya_id = musya.id if musya else None
+    _sync_demo_transport_lk_requests_copy(db, org1.id, demo_title, musya_id)
 
 
 def sync_demo_adoption_applications_for_profile_mock(db: Session) -> None:
@@ -985,47 +1042,44 @@ def ensure_demo_plain_users_and_adoption_applications(db: Session) -> None:
 
 
 def ensure_demo_organization_public_pages(db: Session, org1: Organization, org2: Organization) -> None:
-    demo_desc = (
-        "Мы спасаем крупных собак после ДТП и жестокого обращения: лечение, реабилитация, социализация "
-        "и поиск дома. Сегодня под опекой более 150 животных."
+    org1_gallery_paths = _materialize_org1_gallery_images()
+    org1.name = "Благотворительный фонд «Верный друг»"
+    org1.tagline = "Помощь собакам крупного размера и собакам-инвалидам"
+    org1.description = (
+        "Мы спасаем крупных собак, пострадавших от жестокого обращения или ДТП. "
+        "Лечим, социализируем и находим им новые семьи. Под нашей опекой сейчас находится 150 хвостиков."
     )
-    placeholder = "Фонд помощи животным."
-    if (org1.description or "").strip() in (placeholder, ""):
-        org1.description = demo_desc
-    org1.tagline = org1.tagline or "Помощь собакам крупного размера и собакам-инвалидам"
-    if org1.city and org1.city.lower() == "москва":
-        org1.city = "Екатеринбург"
-    if (org1.city or "").strip().lower() == "екатеринбург":
-        rl = (org1.region or "").strip().lower()
-        if not org1.region or rl == "екатеринбург" or "свердловск" in rl:
-            org1.region = "Свердловская область"
-    org1.phone = org1.phone or "+7 (343) 000-00-01"
-    org1.email = org1.email or "info@verni-drug.example.org"
-    if not getattr(org1, "social_links_json", None):
-        org1.social_links_json = json.dumps(
-            [
-                {"label": "Telegram", "url": "https://t.me/verni_drug_demo"},
-                {"label": "ВКонтакте", "url": "https://vk.com/verni_drug_demo"},
-                {"label": "Instagram", "url": "https://instagram.com/verni_drug_demo"},
-            ],
-            ensure_ascii=False,
-        )
-    org1.admission_rules = org1.admission_rules or (
-        "Приём животных по предварительной записи после короткой анкеты. Работаем по согласованию с городскими службами."
+    org1.city = "Екатеринбург"
+    org1.region = "Свердловская область"
+    org1.address = "Екатеринбург, ул. Добрых дел, 10"
+    org1.phone = "+7 (927) 412-58-90"
+    org1.email = "info@dobryelapy.ru"
+    org1.social_links_json = json.dumps(
+        [
+            {"platform": "vk", "url": "https://vk.com/verni_drug_demo"},
+            {"platform": "telegram", "url": "https://t.me/verni_drug_demo"},
+            {"platform": "whatsapp", "url": "https://wa.me/79274125890"},
+        ],
+        ensure_ascii=False,
     )
-    org1.adoption_howto = org1.adoption_howto or (
-        "Оставьте заявку на сайте или свяжитесь с куратором — подберём питомца и договоримся о знакомстве "
-        "и условиях передачи."
+    org1.admission_rules = "Правила приема животных"
+    org1.adoption_howto = "Как приютить питомца"
+    org1.founded_year = 2015
+    org1.about_html = (
+        "Приют «Лапа Надежды» помогает бездомным животным, оказавшимся на улице, после жестокого обращения "
+        "или потери дома. Мы занимаемся лечением, стерилизацией, вакцинацией, социализацией и поиском "
+        "ответственных хозяев. За несколько лет работы через нас прошли сотни животных. Сейчас в приюте "
+        "живут кошки и собаки разного возраста и характера.\n\n"
+        "Наши основные задачи:\n"
+        "- Лечение и реабилитация тяжелобольных животных.\n"
+        "- Поиск новых семей и кураторов.\n"
+        "- Помощь в передержке и адаптации.\n"
+        "- Просветительская работа об ответственном обращении с питомцами."
     )
-    org1.founded_year = org1.founded_year or 2015
-    org1.about_html = org1.about_html or (
-        "Фонд основан командой кинологов и ведёт прозрачную отчётность. Принимаем поддержку наличными "
-        "и безналично, партнёрству рады всегда."
-    )
-    org1.gallery_json = org1.gallery_json or "[]"
-    org1.inn = org1.inn or "6678099999"
-    org1.ogrn = org1.ogrn or "1186678009999"
-    org1.bank_account = org1.bank_account or "40702810000000000001"
+    org1.gallery_json = json.dumps(org1_gallery_paths, ensure_ascii=False)
+    org1.inn = "1658123471"
+    org1.ogrn = "1181960045123"
+    org1.bank_account = "40702810962000018452"
     org1.has_chat_contact = True
 
     if not db.query(OrganizationReport).filter(OrganizationReport.organization_id == org1.id).first():
@@ -1064,7 +1118,6 @@ def ensure_demo_organization_public_pages(db: Session, org1: Organization, org2:
                     story="Живёт в загородном доме с детьми: любит длинные прогулки и спокойные вечера у камина.",
                     photo_path=None,
                     adopted_at=date(2025, 11, 20),
-                    sort_order=0,
                 ),
                 OrganizationHomeStory(
                     organization_id=org1.id,
@@ -1072,13 +1125,205 @@ def ensure_demo_organization_public_pages(db: Session, org1: Organization, org2:
                     story="Стала первой собакой в семье, подружилась с домашним котом и осваивает городские парки.",
                     photo_path=None,
                     adopted_at=date(2026, 1, 8),
-                    sort_order=1,
                 ),
             ]
         )
 
     org2.tagline = org2.tagline or "Уютный приют для кошек и котят до постоянного дома"
-    org2.has_chat_contact = False
+    org2.description = org2.description or "Приют для кошек и котят. Помогаем с лечением и поиском дома."
+    org2.region = "Ленинградская область"
+    org2.phone = org2.phone or "+7 (812) 000-00-02"
+    org2.email = org2.email or "help@teplye-lapy.example.org"
+    if not getattr(org2, "social_links_json", None):
+        org2.social_links_json = json.dumps(
+            [
+                {"platform": "telegram", "url": "https://t.me/teplye_lapy_demo"},
+                {"platform": "vk", "url": "https://vk.com/teplye_lapy_demo"},
+            ],
+            ensure_ascii=False,
+        )
+    org2.admission_rules = org2.admission_rules or "Принимаем животных после первичного осмотра и диагностики."
+    org2.adoption_howto = org2.adoption_howto or "Заполните анкету, далее согласуем знакомство с питомцем."
+    org2.founded_year = org2.founded_year or 2018
+    org2.about_html = org2.about_html or "Мы специализируемся на помощи кошкам и котятам в сложных ситуациях."
+    org2.gallery_json = org2.gallery_json or "[]"
+    org2.inn = org2.inn or "7812456700"
+    org2.ogrn = org2.ogrn or "1197800001234"
+    org2.bank_account = org2.bank_account or "40702810000000000002"
+    org2.has_chat_contact = True
+    if not db.query(OrganizationReport).filter(OrganizationReport.organization_id == org2.id).first():
+        db.add_all(
+            [
+                OrganizationReport(
+                    organization_id=org2.id,
+                    title="Отчёт за апрель 2026",
+                    summary="Содержание, лечение и пристройство кошек.",
+                    body="Краткий отчёт о расходах и результатах работы приюта за апрель.",
+                    detail_url=None,
+                    published_at=datetime(2026, 4, 30, 18, 0, 0),
+                    is_published=True,
+                ),
+            ]
+        )
+    if (
+        db.query(OrganizationHomeStory.id)
+        .filter(OrganizationHomeStory.organization_id == org2.id)
+        .first()
+        is None
+    ):
+        db.add_all(
+            [
+                OrganizationHomeStory(
+                    organization_id=org2.id,
+                    animal_name="Боня",
+                    story="Боня уехала в новую семью и уже освоилась в квартире.",
+                    photo_path=None,
+                    adopted_at=date(2026, 2, 12),
+                )
+            ]
+        )
+
+
+def ensure_demo_org_comms(db: Session, org: Organization) -> None:
+    org_user = db.query(User).filter(User.id == org.owner_user_id).first() if org.owner_user_id else None
+    if org_user is None:
+        return
+
+    volunteer = db.query(User).filter(User.email == "volunteer1@example.com").first()
+    adopter = db.query(User).filter(User.email == "user_demo@example.com").first()
+    if volunteer is None or adopter is None:
+        return
+
+    animal = (
+        db.query(Animal)
+        .filter(Animal.organization_id == org.id)
+        .order_by(Animal.created_at.desc(), Animal.id.desc())
+        .first()
+    )
+    animal_name = animal.name if animal else "подопечного"
+    ctx = f"Анкета на {animal_name}"
+    dialog = (
+        db.query(OrgChatDialog)
+        .filter(
+            OrgChatDialog.organization_id == org.id,
+            OrgChatDialog.participant_user_id == adopter.id,
+            OrgChatDialog.context_title == ctx,
+        )
+        .first()
+    )
+    if dialog is None:
+        dialog = OrgChatDialog(
+            organization_id=org.id,
+            participant_user_id=adopter.id,
+            participant_name=adopter.full_name or "Пользователь",
+            participant_avatar_path=None,
+            context_type="adoption_application",
+            context_entity_id=animal.id if animal else None,
+            context_title=ctx,
+            last_message_preview=None,
+            last_message_at=None,
+            unread_count_org=0,
+        )
+        db.add(dialog)
+        db.flush()
+    if not db.query(OrgChatMessage.id).filter(OrgChatMessage.dialog_id == dialog.id).first():
+        m1 = OrgChatMessage(
+            dialog_id=dialog.id,
+            sender_user_id=adopter.id,
+            sender_role=UserRole.USER.value,
+            body=f"Здравствуйте! Подскажите, можно ли познакомиться с {animal_name} на этой неделе?",
+            read_by_org_at=None,
+        )
+        m2 = OrgChatMessage(
+            dialog_id=dialog.id,
+            sender_user_id=org_user.id,
+            sender_role=UserRole.ORGANIZATION.value,
+            body="Добрый день! Да, можем согласовать встречу в субботу после 14:00.",
+            read_by_org_at=None,
+        )
+        db.add_all([m1, m2])
+        db.flush()
+        dialog.last_message_preview = m2.body
+        dialog.last_message_at = m2.created_at
+        dialog.unread_count_org = 1
+
+    help_req = (
+        db.query(HelpRequest)
+        .filter(HelpRequest.organization_id == org.id)
+        .order_by(HelpRequest.created_at.desc(), HelpRequest.id.desc())
+        .first()
+    )
+    ctx2 = f"Отклик волонтёра: {help_req.title if help_req else 'Задача'}"
+    dialog2 = (
+        db.query(OrgChatDialog)
+        .filter(
+            OrgChatDialog.organization_id == org.id,
+            OrgChatDialog.participant_user_id == volunteer.id,
+            OrgChatDialog.context_title == ctx2,
+        )
+        .first()
+    )
+    if dialog2 is None:
+        dialog2 = OrgChatDialog(
+            organization_id=org.id,
+            participant_user_id=volunteer.id,
+            participant_name=volunteer.full_name or "Волонтёр",
+            participant_avatar_path=None,
+            context_type="volunteer_response",
+            context_entity_id=help_req.id if help_req else None,
+            context_title=ctx2,
+            unread_count_org=0,
+        )
+        db.add(dialog2)
+        db.flush()
+    if not db.query(OrgChatMessage.id).filter(OrgChatMessage.dialog_id == dialog2.id).first():
+        n1 = OrgChatMessage(
+            dialog_id=dialog2.id,
+            sender_user_id=volunteer.id,
+            sender_role=UserRole.VOLUNTEER.value,
+            body="Готов взять задачу на перевозку, автомобиль и переноска есть.",
+            read_by_org_at=None,
+        )
+        db.add(n1)
+        db.flush()
+        dialog2.last_message_preview = n1.body
+        dialog2.last_message_at = n1.created_at
+        dialog2.unread_count_org = 1
+
+
+def ensure_demo_org2_incoming_volunteer_response(db: Session, org2: Organization) -> None:
+    volunteer = db.query(User).filter(User.email == "volunteer2@example.com").first()
+    if volunteer is None:
+        return
+    req = (
+        db.query(HelpRequest)
+        .filter(HelpRequest.organization_id == org2.id, HelpRequest.status == "open")
+        .order_by(HelpRequest.created_at.desc(), HelpRequest.id.desc())
+        .first()
+    )
+    if req is None:
+        return
+    exists = (
+        db.query(VolunteerHelpResponse.id)
+        .filter(
+            VolunteerHelpResponse.volunteer_user_id == volunteer.id,
+            VolunteerHelpResponse.help_request_id == req.id,
+        )
+        .first()
+    )
+    if exists:
+        return
+    now = datetime.utcnow()
+    db.add(
+        VolunteerHelpResponse(
+            volunteer_user_id=volunteer.id,
+            help_request_id=req.id,
+            status=VolunteerHelpResponseStatus.PENDING.value,
+            message="Готов помочь по задаче, есть опыт и свободное время вечером.",
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 def seed_demo_data_if_empty(db: Session) -> None:
@@ -1221,7 +1466,10 @@ def seed_demo_data_if_empty(db: Session) -> None:
 
     ensure_demo_plain_users_and_adoption_applications(db)
     ensure_demo_volunteer_help_responses_lk_mock(db, org1)
+    ensure_demo_org2_incoming_volunteer_response(db, org2)
     sync_demo_adoption_applications_for_profile_mock(db)
+    ensure_demo_org_comms(db, org1)
+    ensure_demo_org_comms(db, org2)
     sync_demo_accounts_password(db)
 
     db.commit()

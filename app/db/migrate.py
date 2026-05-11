@@ -386,7 +386,6 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         story TEXT NOT NULL,
                         photo_path VARCHAR(500),
                         adopted_at DATE NOT NULL,
-                        sort_order INTEGER NOT NULL,
                         created_at DATETIME,
                         PRIMARY KEY (id),
                         FOREIGN KEY(organization_id) REFERENCES organizations (id) ON DELETE CASCADE
@@ -400,6 +399,88 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     "ON organization_home_stories (organization_id)"
                 )
             )
+
+        if _has_table(conn, "organization_home_stories"):
+            _drop_sqlite_columns_if_exist(conn, "organization_home_stories", ["sort_order"])
+
+        if not _has_table(conn, "org_chat_dialogs"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE org_chat_dialogs (
+                        id INTEGER NOT NULL,
+                        organization_id INTEGER NOT NULL,
+                        participant_user_id INTEGER,
+                        participant_name VARCHAR(255) NOT NULL,
+                        participant_avatar_path VARCHAR(500),
+                        context_type VARCHAR(40),
+                        context_entity_id INTEGER,
+                        context_title VARCHAR(255),
+                        last_message_preview VARCHAR(500),
+                        last_message_at DATETIME,
+                        unread_count_org INTEGER NOT NULL,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
+                        FOREIGN KEY(participant_user_id) REFERENCES users (id) ON DELETE SET NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_chat_dialogs_org "
+                    "ON org_chat_dialogs (organization_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_chat_dialogs_last_message_at "
+                    "ON org_chat_dialogs (last_message_at)"
+                )
+            )
+
+        if not _has_table(conn, "org_chat_messages"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE org_chat_messages (
+                        id INTEGER NOT NULL,
+                        dialog_id INTEGER NOT NULL,
+                        sender_user_id INTEGER,
+                        sender_role VARCHAR(40) NOT NULL,
+                        body TEXT NOT NULL,
+                        photo_path VARCHAR(500),
+                        created_at DATETIME,
+                        read_by_org_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(dialog_id) REFERENCES org_chat_dialogs (id) ON DELETE CASCADE,
+                        FOREIGN KEY(sender_user_id) REFERENCES users (id) ON DELETE SET NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_chat_messages_dialog "
+                    "ON org_chat_messages (dialog_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_chat_messages_created_at "
+                    "ON org_chat_messages (created_at)"
+                )
+            )
+
+        if _has_table(conn, "org_chat_messages"):
+            ocm_cols = _table_columns(conn, "org_chat_messages")
+            if "photo_path" not in ocm_cols:
+                conn.execute(text("ALTER TABLE org_chat_messages ADD COLUMN photo_path VARCHAR(500)"))
+
+        if _has_table(conn, "org_notifications"):
+            conn.execute(text("DROP TABLE org_notifications"))
 
         if not _has_table(conn, "knowledge_articles"):
             conn.execute(
@@ -491,7 +572,6 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         volunteer_requirements TEXT,
                         volunteer_competencies_json TEXT,
                         target_amount FLOAT,
-                        collected_amount FLOAT NOT NULL,
                         deadline_at DATETIME,
                         deadline_note VARCHAR(255),
                         media_path VARCHAR(500),
@@ -515,7 +595,7 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_is_urgent ON help_requests (is_urgent)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_deadline_at ON help_requests (deadline_at)"))
         else:
-            _drop_sqlite_columns_if_exist(conn, "help_requests", ["urgency_level"])
+            _drop_sqlite_columns_if_exist(conn, "help_requests", ["urgency_level", "collected_amount"])
             hr_cols = _table_columns(conn, "help_requests")
             if "deadline_note" not in hr_cols:
                 conn.execute(text("ALTER TABLE help_requests ADD COLUMN deadline_note VARCHAR(255)"))

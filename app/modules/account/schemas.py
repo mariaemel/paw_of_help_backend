@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -197,3 +199,316 @@ class VolunteerReportOut(BaseModel):
 
 class AvatarUploadResponse(BaseModel):
     avatar_url: str
+
+
+class OrgCommsDialogItem(BaseModel):
+    id: int
+    participant_name: str
+    participant_avatar_url: str | None = None
+    context_type: str | None = None
+    context_entity_id: int | None = None
+    context_title: str | None = None
+    last_message_preview: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+
+
+class OrgCommsDialogListResponse(BaseModel):
+    total: int
+    unread_total: int = 0
+    items: list[OrgCommsDialogItem]
+
+
+class OrgCommsMessageItem(BaseModel):
+    id: int
+    sender_user_id: int | None = None
+    sender_role: str
+    body: str
+    photo_url: str | None = None
+    created_at: datetime
+    is_outgoing: bool = False
+
+
+class OrgCommsDialogDetail(BaseModel):
+    dialog: OrgCommsDialogItem
+    context_hint: str | None = None
+    messages: list[OrgCommsMessageItem]
+
+
+class OrgSocialLinkIn(BaseModel):
+    platform: Literal["vk", "telegram", "whatsapp"] = Field(description="vk | telegram | whatsapp")
+    url: str = Field(min_length=3, max_length=500)
+
+
+class OrgCabinetProfileOut(BaseModel):
+    name: str | None = None
+    specialization: str | None = None
+    description: str | None = None
+    city: str | None = None
+    logo_url: str | None = None
+    cover_url: str | None = None
+
+
+class OrgCabinetContactsOut(BaseModel):
+    phone: str | None = None
+    email: str | None = None
+    social_platform_options: list[str] = Field(default_factory=lambda: ["vk", "telegram", "whatsapp"])
+    social_links: list[OrgSocialLinkIn] = Field(default_factory=list)
+
+
+class OrgGalleryImageItem(BaseModel):
+    url: str
+    description: str | None = None
+
+
+class OrgCabinetAboutOut(BaseModel):
+    history: str | None = None
+    gallery: list[OrgGalleryImageItem] = Field(default_factory=list)
+    inn: str | None = None
+    ogrn: str | None = None
+    bank_account: str | None = None
+
+
+class OrgCabinetInstructionsOut(BaseModel):
+    adoption_howto: str | None = None
+    admission_rules: str | None = None
+
+
+class OrgCabinetProfileResponse(BaseModel):
+    profile: OrgCabinetProfileOut
+    contacts: OrgCabinetContactsOut
+    about: OrgCabinetAboutOut
+    instructions: OrgCabinetInstructionsOut
+
+
+class OrgCabinetProfilePatch(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    specialization: str | None = Field(default=None, max_length=150)
+    description: str | None = Field(default=None, max_length=3000)
+    city: str | None = Field(default=None, max_length=120)
+
+
+class OrgCabinetContactsPatch(BaseModel):
+    phone: str | None = Field(default=None, max_length=64)
+    email: EmailStr | None = None
+    social_links: list[OrgSocialLinkIn] | None = None
+
+
+class OrgGalleryImagePatch(BaseModel):
+    url: str
+    description: str | None = Field(default=None, max_length=500)
+
+
+class OrgCabinetAboutPatch(BaseModel):
+    history: str | None = Field(default=None, max_length=3000)
+    gallery: list[OrgGalleryImagePatch] | None = None
+    inn: str | None = Field(default=None, max_length=32)
+    ogrn: str | None = Field(default=None, max_length=32)
+    bank_account: str | None = Field(default=None, max_length=64)
+
+
+class OrgCabinetInstructionsPatch(BaseModel):
+    adoption_howto: str | None = Field(default=None, max_length=2000)
+    admission_rules: str | None = Field(default=None, max_length=2000)
+
+
+class OrgCabinetProfilePatchRequest(BaseModel):
+    profile: OrgCabinetProfilePatch | None = None
+    contacts: OrgCabinetContactsPatch | None = None
+    about: OrgCabinetAboutPatch | None = None
+    instructions: OrgCabinetInstructionsPatch | None = None
+
+
+class OrgIncomingAdoptionItem(BaseModel):
+    id: int
+    applicant_user_id: int
+    applicant_name: str
+    applicant_email: str
+    applicant_phone: str | None = None
+    animal_id: int
+    animal_name: str
+    created_at: datetime
+    status: str
+    status_label: str
+    message: str | None = None
+
+
+class OrgIncomingAdoptionListResponse(BaseModel):
+    total: int
+    items: list[OrgIncomingAdoptionItem]
+
+
+class OrgIncomingVolunteerResponseItem(BaseModel):
+    id: int
+    volunteer_user_id: int
+    volunteer_name: str
+    help_request_id: int
+    help_request_title: str
+    created_at: datetime
+    status: str
+    status_label: str
+    message: str | None = None
+
+
+class OrgIncomingVolunteerResponseListResponse(BaseModel):
+    total: int
+    items: list[OrgIncomingVolunteerResponseItem]
+
+
+class OrgIncomingRejectRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class OrgOwnedAnimalItem(BaseModel):
+    id: int
+    name: str
+    species: str
+    age_months: int
+    status: str
+    is_urgent: bool = False
+    primary_photo_url: str | None = None
+    created_at: datetime
+
+
+class OrgOwnedAnimalListResponse(BaseModel):
+    total: int
+    items: list[OrgOwnedAnimalItem]
+
+
+class OrgOwnedAnimalCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    species: str = Field(default="cat", max_length=20)
+    sex: str = Field(default="unknown", max_length=20)
+    age_months: int = Field(default=0, ge=0, le=600)
+    breed: str | None = Field(default=None, max_length=120)
+    status: str = Field(default="looking_for_home", max_length=40)
+    full_description: str | None = Field(default=None, max_length=8000)
+    location_city: str | None = Field(default=None, max_length=120)
+    is_urgent: bool = False
+
+
+class OrgOwnedAnimalUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    status: str | None = Field(default=None, max_length=40)
+    age_months: int | None = Field(default=None, ge=0, le=600)
+    breed: str | None = Field(default=None, max_length=120)
+    full_description: str | None = Field(default=None, max_length=8000)
+    location_city: str | None = Field(default=None, max_length=120)
+    is_urgent: bool | None = None
+
+
+class OrgOwnedHelpRequestItem(BaseModel):
+    id: int
+    title: str
+    description: str = Field(description="Полный текст описания заявки (как в макете карточки)")
+    type_group: str = Field(description="fundraising | volunteer_task")
+    help_type: str
+    animal_id: int | None = None
+    animal_name: str | None = None
+    status: str
+    is_urgent: bool
+    target_amount: float | None = None
+    deadline_at: datetime | None = None
+    deadline_note: str | None = None
+    created_at: datetime
+
+
+class OrgOwnedHelpRequestListResponse(BaseModel):
+    total: int
+    items: list[OrgOwnedHelpRequestItem]
+
+
+class OrgReportItem(BaseModel):
+    id: int
+    title: str
+    summary: str | None = None
+    body: str | None = None
+    detail_url: str | None = None
+    published_at: datetime
+    is_published: bool
+
+
+class OrgReportListResponse(BaseModel):
+    total: int
+    items: list[OrgReportItem]
+
+
+class OrgReportCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=255)
+    summary: str | None = Field(default=None, max_length=600)
+    body: str | None = None
+    detail_url: str | None = Field(default=None, max_length=2048)
+    published_at: datetime | None = None
+    is_published: bool = True
+
+
+class OrgReportUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=255)
+    summary: str | None = Field(default=None, max_length=600)
+    body: str | None = None
+    detail_url: str | None = Field(default=None, max_length=2048)
+    published_at: datetime | None = None
+    is_published: bool | None = None
+
+
+class OrgHomeStoryItem(BaseModel):
+    id: int
+    animal_name: str
+    story: str
+    photo_url: str | None = None
+    adopted_at: date
+
+
+class OrgHomeStoryListResponse(BaseModel):
+    total: int
+    items: list[OrgHomeStoryItem]
+
+
+class OrgHomeStoryCreate(BaseModel):
+    animal_name: str = Field(min_length=1, max_length=120)
+    story: str = Field(min_length=5)
+    photo_path: str | None = Field(default=None, max_length=500)
+    adopted_at: date
+
+
+class OrgHomeStoryUpdate(BaseModel):
+    animal_name: str | None = Field(default=None, min_length=1, max_length=120)
+    story: str | None = Field(default=None, min_length=5)
+    photo_path: str | None = Field(default=None, max_length=500)
+    adopted_at: date | None = None
+
+
+class OrgAssetUploadResponse(BaseModel):
+    url: str
+    gallery: list[OrgGalleryImageItem] = Field(default_factory=list)
+
+
+class OrgEventItem(BaseModel):
+    id: int
+    title: str
+    city: str | None = None
+    address: str | None = None
+    starts_at: datetime
+    ends_at: datetime | None = None
+    is_published: bool
+    is_archived: bool
+
+
+class OrgEventListResponse(BaseModel):
+    total: int
+    items: list[OrgEventItem]
+
+
+class OrgArticleItem(BaseModel):
+    id: int
+    title: str
+    category: str
+    read_minutes: int
+    is_published: bool
+    is_archived: bool
+    created_at: datetime
+
+
+class OrgArticleListResponse(BaseModel):
+    total: int
+    items: list[OrgArticleItem]

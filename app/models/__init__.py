@@ -5,6 +5,7 @@ from app.models.event import Event
 from app.models.help_request import HelpRequest
 from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
+from app.models.org_chat import OrgChatDialog, OrgChatMessage
 from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
@@ -35,6 +36,8 @@ __all__ = [
     "KnowledgeArticle",
     "Event",
     "Organization",
+    "OrgChatDialog",
+    "OrgChatMessage",
     "OrganizationReport",
     "OrganizationHomeStory",
     "UserProfile",
