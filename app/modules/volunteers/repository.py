@@ -1,24 +1,13 @@
-import math
-
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import asc, desc, exists, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.geo import filter_sort_paginate_nearby
+from app.core.list_query import apply_city_filter, apply_text_search, geo_bbox_clauses
 from app.models.knowledge import KnowledgeArticle
 from app.models.profile import VolunteerProfile
 from app.models.user import User, UserRole
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.modules.volunteers.schemas import VolunteerFilterParams
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 6371.0
-    p = math.pi / 180
-    a = (
-        0.5
-        - math.cos((lat2 - lat1) * p) / 2
-        + math.cos(lat1 * p) * math.cos(lat2 * p) * (1 - math.cos((lon2 - lon1) * p)) / 2
-    )
-    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
 def _profile_has_competency_slug(slug: str):
@@ -87,28 +76,14 @@ class VolunteerRepository:
             .all()
         )
 
-    def list_volunteers(self, filters: VolunteerFilterParams) -> tuple[int, list[tuple[User, VolunteerProfile]]]:
+    def _list_volunteers_query(self, filters: VolunteerFilterParams):
         q = (
             self.db.query(User, VolunteerProfile)
             .join(VolunteerProfile, VolunteerProfile.user_id == User.id)
-            .options(
-                selectinload(User.volunteer_profile)
-                .selectinload(VolunteerProfile.competency_assignments)
-                .selectinload(VolunteerCompetencyAssignment.competency_item)
-            )
             .filter(User.role == UserRole.VOLUNTEER)
         )
-
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            q = q.filter(
-                or_(
-                    func.lower(User.full_name).like(like),
-                    func.lower(VolunteerProfile.about_me).like(like),
-                )
-            )
-        if filters.city:
-            q = q.filter(func.lower(VolunteerProfile.location_city) == filters.city.lower())
+        q = apply_text_search(q, filters.q, User.full_name, VolunteerProfile.about_me)
+        q = apply_city_filter(q, VolunteerProfile.location_city, filters.city)
 
         if filters.animal_category and filters.animal_category != "all":
             cat = filters.animal_category.lower()
@@ -130,39 +105,62 @@ class VolunteerRepository:
         elif filters.has_transport is False:
             q = q.filter(~_profile_has_competency_slug("auto"))
 
-        rows: list[tuple[User, VolunteerProfile]] = q.all()
+        return q
+
+    def list_volunteers(self, filters: VolunteerFilterParams) -> tuple[int, list[tuple[User, VolunteerProfile]]]:
+        q = self._list_volunteers_query(filters)
+        load_opts = (
+            selectinload(User.volunteer_profile)
+            .selectinload(VolunteerProfile.competency_assignments)
+            .selectinload(VolunteerCompetencyAssignment.competency_item)
+        )
 
         if filters.nearby and filters.latitude is not None and filters.longitude is not None:
-            kept: list[tuple[User, VolunteerProfile]] = []
-            for user, profile in rows:
-                if profile.latitude is None or profile.longitude is None:
-                    continue
-                dist = _haversine_km(
-                    filters.latitude,
-                    filters.longitude,
-                    float(profile.latitude),
-                    float(profile.longitude),
-                )
-                if dist <= filters.radius_km:
-                    kept.append((user, profile))
-            rows = kept
-
-        total = len(rows)
-
-        sort_by = filters.sort_by or "name"
-        if sort_by == "city":
-            rows.sort(key=lambda r: (r[1].location_city or "", r[0].id))
-        elif sort_by == "available_first":
-            rows.sort(
-                key=lambda r: (
-                    not r[1].is_available,
-                    -(r[1].completed_tasks_count or 0),
-                    r[0].full_name or "",
-                    r[0].id,
+            radius = filters.radius_km or 50.0
+            q = q.filter(
+                *geo_bbox_clauses(
+                    VolunteerProfile.latitude, VolunteerProfile.longitude, filters.latitude, filters.longitude, radius
                 )
             )
-        else:
-            rows.sort(key=lambda r: (r[0].full_name or "", r[0].id))
+            candidates: list[tuple[User, VolunteerProfile]] = q.options(load_opts).all()
 
-        chunk = rows[filters.offset : filters.offset + filters.limit]
-        return total, chunk
+            sort_by = filters.sort_by or "name"
+            if sort_by == "city":
+                sort_fn = lambda r: (r[1].location_city or "", r[0].id)
+            elif sort_by == "available_first":
+                sort_fn = lambda r: (
+                    not r[1].is_available,
+                    -(r[1].completed_tasks_count or 0),
+                    (r[0].full_name or "").lower(),
+                    r[0].id,
+                )
+            else:
+                sort_fn = lambda r: ((r[0].full_name or "").lower(), r[0].id)
+
+            return filter_sort_paginate_nearby(
+                candidates,
+                center_lat=filters.latitude,
+                center_lon=filters.longitude,
+                radius_km=radius,
+                get_lat_lon=lambda r: (r[1].latitude, r[1].longitude),
+                sort_key=sort_fn,
+                offset=filters.offset,
+                limit=filters.limit,
+            )
+
+        total = q.order_by(None).count()
+        sort_by = filters.sort_by or "name"
+        if sort_by == "city":
+            q = q.order_by(asc(VolunteerProfile.location_city), asc(User.full_name), asc(User.id))
+        elif sort_by == "available_first":
+            q = q.order_by(
+                desc(VolunteerProfile.is_available),
+                desc(VolunteerProfile.completed_tasks_count),
+                asc(User.full_name),
+                asc(User.id),
+            )
+        else:
+            q = q.order_by(asc(User.full_name), asc(User.id))
+
+        rows = q.options(load_opts).offset(filters.offset).limit(filters.limit).all()
+        return total, rows

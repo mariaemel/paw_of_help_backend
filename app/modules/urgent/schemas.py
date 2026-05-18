@@ -18,6 +18,10 @@ class CatalogOption(BaseModel):
     label: str
 
 
+class HelpRequestPaymentDetails(BaseModel):
+    bank_account: str | None = None
+
+
 class UrgentRequestListItem(BaseModel):
     id: int
     title: str
@@ -37,10 +41,23 @@ class UrgentRequestListItem(BaseModel):
     status: str
     target_amount: float | None = None
     primary_photo_url: str | None = None
+    animal_photo_url: str | None = Field(
+        default=None,
+        description="Фото связанного животного (дублирует primary_photo_url, если заявка привязана к питомцу)",
+    )
+    payment_details: HelpRequestPaymentDetails = Field(
+        default_factory=HelpRequestPaymentDetails,
+        description="Счёт для перевода: заявки или организации",
+    )
+    uses_organization_payment_details: bool = True
     badges: list[str] = Field(default_factory=list)
 
 
 class UrgentRequestDetail(UrgentRequestListItem):
+    bank_account_override: str | None = Field(
+        default=None,
+        description="Счёт заявки, если отличается от счёта организации (для формы редактирования)",
+    )
     address: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -90,6 +107,11 @@ class UrgentRequestCreate(BaseModel):
     deadline_at: datetime | None = None
     deadline_note: str | None = Field(default=None, max_length=255)
     media_path: str | None = None
+    bank_account: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Счёт для этой заявки; сохраняется только если отличается от счёта организации",
+    )
     status: str = Field(default="open", description="open | in_progress | closed")
     is_published: bool = True
 
@@ -111,6 +133,7 @@ class UrgentRequestUpdate(BaseModel):
     deadline_at: datetime | None = None
     deadline_note: str | None = Field(default=None, max_length=255)
     media_path: str | None = None
+    bank_account: str | None = Field(default=None, max_length=64)
     status: str | None = Field(default=None, description="open | in_progress | closed")
     is_published: bool | None = None
 

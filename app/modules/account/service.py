@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.models.adoption_application import AdoptionApplicationStatus, AnimalAdoptionApplication
 from app.models.animal import Animal, AnimalStatus
 from app.models.help_request import HelpRequest
+from app.models.org_chat import OrgChatDialog
 from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
@@ -27,6 +28,13 @@ from app.modules.animals.tags import species_label_ru
 from app.modules.organizations.service import OrganizationService
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.urgent.schemas import HELP_TYPE_OPTIONS
+from app.modules.account.adoption_form import (
+    AdoptionApplicationFormBody,
+    adoption_form_from_row,
+    adoption_form_to_dict,
+    apply_adoption_form_patch,
+)
+from app.modules.help_requests.requisites import effective_payment_bank_account, uses_organization_payment_details
 from app.modules.urgent.schemas import UrgentRequestCreate, UrgentRequestDetail, UrgentRequestUpdate
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.service import UrgentService
@@ -449,13 +457,17 @@ class AccountService:
                 detail="Анкета на это животное уже есть",
             )
 
+        form = AdoptionApplicationFormBody.model_validate(
+            payload.model_dump(exclude={"animal_id"}, exclude_none=True)
+        )
         row = AnimalAdoptionApplication(
             user_id=user.id,
             animal_id=payload.animal_id,
             status=AdoptionApplicationStatus.PENDING_REVIEW.value,
-            message=payload.message,
+            message=None,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
+            **adoption_form_to_dict(form),
         )
         self.repo.db.add(row)
         try:
@@ -486,6 +498,10 @@ class AccountService:
     def _application_item(self, row: AnimalAdoptionApplication) -> s.AdoptionApplicationListItem:
         a = row.animal
         org_name = a.organization.name if a and a.organization else None
+        org_id = a.organization_id if a else None
+        thread_id = (
+            self._chat_thread_id_for_participant(org_id, row.user_id) if org_id is not None else None
+        )
         return s.AdoptionApplicationListItem(
             id=row.id,
             status=row.status,
@@ -499,11 +515,32 @@ class AccountService:
             organization_name=org_name,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            chat_thread_id=thread_id,
         )
 
     def _application_detail(self, row: AnimalAdoptionApplication) -> s.AdoptionApplicationDetail:
         base = self._application_item(row)
-        return s.AdoptionApplicationDetail(**base.model_dump(), message=row.message)
+        return s.AdoptionApplicationDetail(**base.model_dump(), **adoption_form_from_row(row), message=row.message)
+
+    def _org_incoming_adoption_item(
+        self, row: AnimalAdoptionApplication, organization_id: int | None = None
+    ) -> s.OrgIncomingAdoptionItem:
+        org_id = organization_id
+        if org_id is None and row.animal is not None:
+            org_id = row.animal.organization_id
+        thread_id = self._chat_thread_id_for_participant(org_id, row.user_id) if org_id else None
+        return s.OrgIncomingAdoptionItem(
+            id=row.id,
+            applicant_user_id=row.user_id,
+            animal_id=row.animal_id,
+            animal_name=row.animal.name if row.animal else "?",
+            created_at=row.created_at,
+            status=row.status,
+            status_label=s.APPLICATION_STATUS_LABELS.get(row.status, row.status),
+            message=row.message,
+            chat_thread_id=thread_id,
+            **adoption_form_from_row(row),
+        )
 
     def get_application(self, user: User, application_id: int) -> s.AdoptionApplicationDetail:
         if user.role not in (UserRole.USER, UserRole.VOLUNTEER):
@@ -525,9 +562,8 @@ class AccountService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Редактировать можно только анкету на рассмотрении",
             )
-        if "message" not in payload.model_fields_set:
+        if not apply_adoption_form_patch(row, payload):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
-        row.message = payload.message
         row.updated_at = datetime.utcnow()
         self.repo.db.commit()
         self.repo.db.refresh(row)
@@ -616,6 +652,14 @@ class AccountService:
                 can_send_report = False
         can_view_report = st == VolunteerHelpResponseStatus.COMPLETED.value
 
+        thread_id: str | None = None
+        if can_chat and hr and hr.organization_id:
+            dialog = self.repo.find_org_dialog_by_org_and_participant(
+                hr.organization_id, row.volunteer_user_id
+            )
+            if dialog is not None:
+                thread_id = str(dialog.id)
+
         return s.VolunteerResponseCard(
             id=row.id,
             status=st,
@@ -642,7 +686,7 @@ class AccountService:
             can_cancel_response=can_cancel,
             can_send_report=can_send_report,
             can_view_report=can_view_report,
-            chat_thread_id=None,
+            chat_thread_id=thread_id,
         )
 
     def _response_detail(self, row: VolunteerHelpResponse) -> s.VolunteerResponseDetail:
@@ -1033,11 +1077,14 @@ class AccountService:
             help_type=row.help_type,
             animal_id=row.animal_id,
             animal_name=row.animal.name if row.animal else None,
+            animal_photo_url=_primary_photo_url(row.animal),
             status=row.status,
             is_urgent=bool(row.is_urgent),
             target_amount=row.target_amount,
             deadline_at=row.deadline_at,
             deadline_note=row.deadline_note,
+            payment_bank_account=effective_payment_bank_account(row),
+            uses_organization_payment_details=uses_organization_payment_details(row),
             created_at=row.created_at,
         )
 
@@ -1071,22 +1118,7 @@ class AccountService:
         org = self._organization_for_user(user)
         total = self.repo.count_org_adoption_applications(org.id, q, status_value)
         rows = self.repo.list_org_adoption_applications(org.id, q, status_value, limit, offset)
-        items = [
-            s.OrgIncomingAdoptionItem(
-                id=r.id,
-                applicant_user_id=r.user_id,
-                applicant_name=(r.user.full_name if r.user else None) or f"Пользователь #{r.user_id}",
-                applicant_email=r.user.email if r.user else "",
-                applicant_phone=r.user.phone if r.user else None,
-                animal_id=r.animal_id,
-                animal_name=r.animal.name if r.animal else "?",
-                created_at=r.created_at,
-                status=r.status,
-                status_label=s.APPLICATION_STATUS_LABELS.get(r.status, r.status),
-                message=r.message,
-            )
-            for r in rows
-        ]
+        items = [self._org_incoming_adoption_item(r, org.id) for r in rows]
         return s.OrgIncomingAdoptionListResponse(total=total, items=items)
 
     def get_org_incoming_adoption(self, user: User, application_id: int) -> s.OrgIncomingAdoptionItem:
@@ -1094,19 +1126,7 @@ class AccountService:
         r = self.repo.get_org_adoption_application(org.id, application_id)
         if r is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Анкета не найдена")
-        return s.OrgIncomingAdoptionItem(
-            id=r.id,
-            applicant_user_id=r.user_id,
-            applicant_name=(r.user.full_name if r.user else None) or f"Пользователь #{r.user_id}",
-            applicant_email=r.user.email if r.user else "",
-            applicant_phone=r.user.phone if r.user else None,
-            animal_id=r.animal_id,
-            animal_name=r.animal.name if r.animal else "?",
-            created_at=r.created_at,
-            status=r.status,
-            status_label=s.APPLICATION_STATUS_LABELS.get(r.status, r.status),
-            message=r.message,
-        )
+        return self._org_incoming_adoption_item(r, org.id)
 
     def approve_org_incoming_adoption(self, user: User, application_id: int) -> s.OrgIncomingAdoptionItem:
         org = self._organization_for_user(user)
@@ -1185,6 +1205,7 @@ class AccountService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отклик уже обработан")
         r.status = VolunteerHelpResponseStatus.ACCEPTED.value
         r.updated_at = datetime.utcnow()
+        self._ensure_volunteer_response_dialog(org, r)
         self.repo.db.commit()
         return self.get_org_incoming_volunteer_response(user, response_id)
 
@@ -1205,9 +1226,75 @@ class AccountService:
         self.repo.db.commit()
         return self.get_org_incoming_volunteer_response(user, response_id)
 
+    def _ensure_volunteer_response_dialog(self, org, response: VolunteerHelpResponse) -> None:
+        hr = response.help_request
+        title = f"Отклик волонтёра: {hr.title if hr else 'Задача'}"
+        existing = self.repo.find_org_dialog_by_org_and_participant(org.id, response.volunteer_user_id)
+        if existing is not None:
+            if not existing.context_title:
+                existing.context_title = title
+            if hr and existing.context_entity_id is None:
+                existing.context_entity_id = hr.id
+                existing.context_type = "volunteer_response"
+            return
+        volunteer = self.repo.get_user_by_id_with_profiles(response.volunteer_user_id)
+        if volunteer is None:
+            return
+        avatar: str | None = None
+        if volunteer.volunteer_profile and volunteer.volunteer_profile.avatar_path:
+            avatar = volunteer.volunteer_profile.avatar_path
+        self.repo.db.add(
+            OrgChatDialog(
+                organization_id=org.id,
+                participant_user_id=volunteer.id,
+                participant_name=volunteer.full_name or f"Волонтёр #{volunteer.id}",
+                participant_avatar_path=avatar,
+                context_type="volunteer_response",
+                context_entity_id=hr.id if hr else None,
+                context_title=title,
+                unread_count_org=0,
+                unread_count_volunteer=0,
+                unread_count_user=0,
+            )
+        )
+
+    def _chat_thread_id_for_participant(
+        self, organization_id: int | None, participant_user_id: int
+    ) -> str | None:
+        if organization_id is None:
+            return None
+        dialog = self.repo.find_org_dialog_by_org_and_participant(organization_id, participant_user_id)
+        return str(dialog.id) if dialog is not None else None
+
+    def _participant_display(self, participant: User) -> tuple[str, str | None]:
+        name = participant.full_name or f"Участник #{participant.id}"
+        avatar: str | None = None
+        if participant.user_profile and participant.user_profile.avatar_path:
+            avatar = participant.user_profile.avatar_path
+        elif participant.volunteer_profile and participant.volunteer_profile.avatar_path:
+            avatar = participant.volunteer_profile.avatar_path
+        return name, avatar
+
+    def _increment_participant_unread_after_org_message(self, dialog: OrgChatDialog) -> None:
+        pid = dialog.participant_user_id
+        if pid is None:
+            return
+        if self.repo.participant_is_volunteer(pid):
+            self.repo.increment_dialog_unread_for_volunteer(dialog.id)
+        elif self.repo.participant_is_user(pid):
+            self.repo.increment_dialog_unread_for_user(dialog.id)
+
+    def _ensure_participant_can_reply(self, dialog_id: int) -> None:
+        if not self.repo.dialog_has_organization_message(dialog_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Ответить можно только после сообщения от организации",
+            )
+
     def _dialog_item(self, row) -> s.OrgCommsDialogItem:
         return s.OrgCommsDialogItem(
             id=row.id,
+            participant_user_id=row.participant_user_id,
             participant_name=row.participant_name,
             participant_avatar_url=self._media_url(row.participant_avatar_path),
             context_type=row.context_type,
@@ -1325,6 +1412,317 @@ class AccountService:
         )
         preview = self._comms_preview_text(body_stored, bool(photo_path))
         self.repo.update_dialog_last_message(dialog, preview, msg.created_at)
+        self._increment_participant_unread_after_org_message(dialog)
+        self.repo.db.commit()
+        self.repo.db.refresh(msg)
+        return s.OrgCommsMessageItem(
+            id=msg.id,
+            sender_user_id=msg.sender_user_id,
+            sender_role=msg.sender_role,
+            body=msg.body,
+            photo_url=self._media_url(msg.photo_path),
+            created_at=msg.created_at,
+            is_outgoing=True,
+        )
+
+    def open_org_dialog_with_participant(
+        self, user: User, payload: s.OrgCommsDialogOpenRequest
+    ) -> s.OrgCommsDialogItem:
+        org = self._organization_for_user(user)
+        participant = self.repo.get_user_by_id_with_profiles(payload.participant_user_id)
+        if participant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        role = str(participant.role)
+        if role not in (UserRole.USER.value, UserRole.VOLUNTEER.value):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Диалог можно открыть только с пользователем или волонтёром",
+            )
+        existing = self.repo.find_org_dialog_by_org_and_participant(org.id, participant.id)
+        if existing is not None:
+            if payload.context_title and not existing.context_title:
+                existing.context_title = payload.context_title
+            if payload.context_type and not existing.context_type:
+                existing.context_type = payload.context_type
+            if payload.context_entity_id is not None and existing.context_entity_id is None:
+                existing.context_entity_id = payload.context_entity_id
+            self.repo.db.commit()
+            self.repo.db.refresh(existing)
+            return self._dialog_item(existing)
+        name, avatar = self._participant_display(participant)
+        if payload.context_title:
+            ctx_title = payload.context_title
+            ctx_type = payload.context_type
+            ctx_id = payload.context_entity_id
+        elif role == UserRole.VOLUNTEER.value:
+            ctx_title = "Переписка с волонтёром"
+            ctx_type = "volunteer_direct"
+            ctx_id = None
+        else:
+            ctx_title = "Переписка с пользователем"
+            ctx_type = "user_direct"
+            ctx_id = None
+        dialog = OrgChatDialog(
+            organization_id=org.id,
+            participant_user_id=participant.id,
+            participant_name=name,
+            participant_avatar_path=avatar,
+            context_type=ctx_type,
+            context_entity_id=ctx_id,
+            context_title=ctx_title,
+            unread_count_org=0,
+            unread_count_volunteer=0,
+            unread_count_user=0,
+        )
+        self.repo.db.add(dialog)
+        self.repo.db.commit()
+        self.repo.db.refresh(dialog)
+        return self._dialog_item(dialog)
+
+    def open_org_dialog_for_adoption(self, user: User, application_id: int) -> s.OrgCommsDialogItem:
+        org = self._organization_for_user(user)
+        app_row = self.repo.get_org_adoption_application(org.id, application_id)
+        if app_row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Анкета не найдена")
+        animal_name = app_row.animal.name if app_row.animal else "подопечного"
+        return self.open_org_dialog_with_participant(
+            user,
+            s.OrgCommsDialogOpenRequest(
+                participant_user_id=app_row.user_id,
+                context_type="adoption_application",
+                context_entity_id=app_row.id,
+                context_title=f"Анкета на {animal_name}",
+            ),
+        )
+
+    def _volunteer_dialog_item(self, dialog: OrgChatDialog, org) -> s.VolCommsDialogItem:
+        return s.VolCommsDialogItem(
+            id=dialog.id,
+            organization_id=org.id,
+            organization_name=org.name,
+            organization_logo_url=self._media_url(org.logo_path),
+            context_type=dialog.context_type,
+            context_entity_id=dialog.context_entity_id,
+            context_title=dialog.context_title,
+            last_message_preview=dialog.last_message_preview,
+            last_message_at=dialog.last_message_at,
+            unread_count=int(dialog.unread_count_volunteer or 0),
+        )
+
+    def list_volunteer_dialogs(
+        self, user: User, q: str | None, limit: int, offset: int
+    ) -> s.VolCommsDialogListResponse:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        total, unread_total, rows = self.repo.list_volunteer_dialog_rows(user.id, q, limit, offset)
+        return s.VolCommsDialogListResponse(
+            total=total,
+            unread_total=unread_total,
+            items=[self._volunteer_dialog_item(d, o) for d, o in rows],
+        )
+
+    def get_volunteer_dialog(self, user: User, dialog_id: int) -> s.VolCommsDialogDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        row = self.repo.get_volunteer_dialog_row(user.id, dialog_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        dialog, org = row
+        messages = self.repo.list_org_dialog_messages(dialog.id)
+        out_messages = [
+            s.OrgCommsMessageItem(
+                id=m.id,
+                sender_user_id=m.sender_user_id,
+                sender_role=m.sender_role,
+                body=m.body,
+                photo_url=self._media_url(m.photo_path),
+                created_at=m.created_at,
+                is_outgoing=(
+                    m.sender_role == UserRole.VOLUNTEER.value and m.sender_user_id == user.id
+                ),
+            )
+            for m in messages
+        ]
+        self.repo.mark_dialog_messages_read_by_volunteer(dialog.id)
+        self.repo.db.commit()
+        self.repo.db.refresh(dialog)
+        hint = None
+        if dialog.context_title:
+            hint = f"Контекст диалога: {dialog.context_title}"
+        return s.VolCommsDialogDetail(
+            dialog=self._volunteer_dialog_item(dialog, org),
+            context_hint=hint,
+            messages=out_messages,
+        )
+
+    def create_volunteer_dialog_message(
+        self,
+        user: User,
+        dialog_id: int,
+        body: str,
+        image: UploadFile | None,
+    ) -> s.OrgCommsMessageItem:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        row = self.repo.get_volunteer_dialog_row(user.id, dialog_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        dialog, org = row
+        self._ensure_participant_can_reply(dialog.id)
+        text_raw = body or ""
+        if len(text_raw) > 8000:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текст не длиннее 8000 символов")
+        text = text_raw.strip()
+        wants_file = image is not None and bool(getattr(image, "filename", None))
+        if not text and not wants_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите текст сообщения или прикрепите изображение",
+            )
+
+        photo_path: str | None = None
+        if wants_file:
+            try:
+                photo_path = save_org_chat_message_photo(
+                    settings.media_dir,
+                    org.id,
+                    dialog.id,
+                    image,
+                    max_size_bytes=5 * 1024 * 1024,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        body_stored = text if text else ("" if photo_path else text)
+        msg = self.repo.create_org_message(
+            dialog_id=dialog.id,
+            sender_user_id=user.id,
+            sender_role=UserRole.VOLUNTEER.value,
+            body=body_stored,
+            photo_path=photo_path,
+        )
+        preview = self._comms_preview_text(body_stored, bool(photo_path))
+        self.repo.update_dialog_last_message(dialog, preview, msg.created_at)
+        self.repo.increment_dialog_unread_for_org(dialog.id)
+        self.repo.db.commit()
+        self.repo.db.refresh(msg)
+        return s.OrgCommsMessageItem(
+            id=msg.id,
+            sender_user_id=msg.sender_user_id,
+            sender_role=msg.sender_role,
+            body=msg.body,
+            photo_url=self._media_url(msg.photo_path),
+            created_at=msg.created_at,
+            is_outgoing=True,
+        )
+
+    def _user_dialog_item(self, dialog: OrgChatDialog, org) -> s.UserCommsDialogItem:
+        return s.UserCommsDialogItem(
+            id=dialog.id,
+            organization_id=org.id,
+            organization_name=org.name,
+            organization_logo_url=self._media_url(org.logo_path),
+            context_type=dialog.context_type,
+            context_entity_id=dialog.context_entity_id,
+            context_title=dialog.context_title,
+            last_message_preview=dialog.last_message_preview,
+            last_message_at=dialog.last_message_at,
+            unread_count=int(dialog.unread_count_user or 0),
+        )
+
+    def list_user_dialogs(
+        self, user: User, q: str | None, limit: int, offset: int
+    ) -> s.UserCommsDialogListResponse:
+        if user.role != UserRole.USER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для пользователей")
+        total, unread_total, rows = self.repo.list_user_dialog_rows(user.id, q, limit, offset)
+        return s.UserCommsDialogListResponse(
+            total=total,
+            unread_total=unread_total,
+            items=[self._user_dialog_item(d, o) for d, o in rows],
+        )
+
+    def get_user_dialog(self, user: User, dialog_id: int) -> s.UserCommsDialogDetail:
+        if user.role != UserRole.USER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для пользователей")
+        row = self.repo.get_user_dialog_row(user.id, dialog_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        dialog, org = row
+        messages = self.repo.list_org_dialog_messages(dialog.id)
+        out_messages = [
+            s.OrgCommsMessageItem(
+                id=m.id,
+                sender_user_id=m.sender_user_id,
+                sender_role=m.sender_role,
+                body=m.body,
+                photo_url=self._media_url(m.photo_path),
+                created_at=m.created_at,
+                is_outgoing=(m.sender_role == UserRole.USER.value and m.sender_user_id == user.id),
+            )
+            for m in messages
+        ]
+        self.repo.mark_dialog_messages_read_by_user(dialog.id)
+        self.repo.db.commit()
+        self.repo.db.refresh(dialog)
+        hint = None
+        if dialog.context_title:
+            hint = f"Контекст диалога: {dialog.context_title}"
+        return s.UserCommsDialogDetail(
+            dialog=self._user_dialog_item(dialog, org),
+            context_hint=hint,
+            messages=out_messages,
+        )
+
+    def create_user_dialog_message(
+        self,
+        user: User,
+        dialog_id: int,
+        body: str,
+        image: UploadFile | None,
+    ) -> s.OrgCommsMessageItem:
+        if user.role != UserRole.USER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для пользователей")
+        row = self.repo.get_user_dialog_row(user.id, dialog_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Диалог не найден")
+        dialog, org = row
+        self._ensure_participant_can_reply(dialog.id)
+        text_raw = body or ""
+        if len(text_raw) > 8000:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текст не длиннее 8000 символов")
+        text = text_raw.strip()
+        wants_file = image is not None and bool(getattr(image, "filename", None))
+        if not text and not wants_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите текст сообщения или прикрепите изображение",
+            )
+
+        photo_path: str | None = None
+        if wants_file:
+            try:
+                photo_path = save_org_chat_message_photo(
+                    settings.media_dir,
+                    org.id,
+                    dialog.id,
+                    image,
+                    max_size_bytes=5 * 1024 * 1024,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        body_stored = text if text else ("" if photo_path else text)
+        msg = self.repo.create_org_message(
+            dialog_id=dialog.id,
+            sender_user_id=user.id,
+            sender_role=UserRole.USER.value,
+            body=body_stored,
+            photo_path=photo_path,
+        )
+        preview = self._comms_preview_text(body_stored, bool(photo_path))
+        self.repo.update_dialog_last_message(dialog, preview, msg.created_at)
+        self.repo.increment_dialog_unread_for_org(dialog.id)
         self.repo.db.commit()
         self.repo.db.refresh(msg)
         return s.OrgCommsMessageItem(
@@ -1481,6 +1879,7 @@ class AccountService:
                     title=r.title,
                     category=r.category,
                     read_minutes=r.read_minutes,
+                    cover_url=self._media_url(r.cover_path),
                     is_published=bool(r.is_published),
                     is_archived=bool(r.is_archived),
                     created_at=r.created_at,

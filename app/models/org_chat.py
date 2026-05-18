@@ -22,6 +22,8 @@ class OrgChatDialog(Base):
     last_message_preview: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     unread_count_org: Mapped[int] = mapped_column(Integer, default=0)
+    unread_count_volunteer: Mapped[int] = mapped_column(Integer, default=0)
+    unread_count_user: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -37,3 +39,5 @@ class OrgChatMessage(Base):
     photo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     read_by_org_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    read_by_volunteer_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    read_by_user_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)

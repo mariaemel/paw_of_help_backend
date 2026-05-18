@@ -4,6 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.modules.account.adoption_form import (
+    AdoptionApplicationFormBody,
+    AdoptionApplicationFormPatch,
+    AdoptionApplicationFormRead,
+)
 from app.modules.volunteers.schemas import VolunteerWeeklySlot
 
 APPLICATION_STATUS_LABELS: dict[str, str] = {
@@ -103,13 +108,12 @@ class MeProfilePatchRequest(BaseModel):
     organization_contact: OrgSelfPatch | None = None
 
 
-class AdoptionApplicationCreate(BaseModel):
+class AdoptionApplicationCreate(AdoptionApplicationFormBody):
     animal_id: int
-    message: str | None = Field(default=None, max_length=8000)
 
 
-class AdoptionApplicationUpdate(BaseModel):
-    message: str | None = Field(default=None, max_length=8000)
+class AdoptionApplicationUpdate(AdoptionApplicationFormPatch):
+    pass
 
 
 class AdoptionApplicationListItem(BaseModel):
@@ -125,10 +129,17 @@ class AdoptionApplicationListItem(BaseModel):
     organization_name: str | None
     created_at: datetime
     updated_at: datetime
+    chat_thread_id: str | None = Field(
+        default=None,
+        description="ID диалога с организацией (org_chat_dialogs.id), если переписка уже есть",
+    )
 
 
-class AdoptionApplicationDetail(AdoptionApplicationListItem):
-    message: str | None = None
+class AdoptionApplicationDetail(AdoptionApplicationListItem, AdoptionApplicationFormRead):
+    message: str | None = Field(
+        default=None,
+        description="Причина отклонения организацией (если статус rejected)",
+    )
 
 
 class AdoptionApplicationListResponse(BaseModel):
@@ -170,7 +181,7 @@ class VolunteerResponseCard(BaseModel):
     can_view_report: bool = False
     chat_thread_id: str | None = Field(
         default=None,
-        description="Заглушка до модуля чатов; всегда null",
+        description="ID диалога с организацией (org_chat_dialogs.id), если переписка доступна",
     )
 
 
@@ -201,8 +212,16 @@ class AvatarUploadResponse(BaseModel):
     avatar_url: str
 
 
+class OrgCommsDialogOpenRequest(BaseModel):
+    participant_user_id: int = Field(ge=1)
+    context_type: str | None = Field(default=None, max_length=40)
+    context_entity_id: int | None = Field(default=None, ge=1)
+    context_title: str | None = Field(default=None, max_length=255)
+
+
 class OrgCommsDialogItem(BaseModel):
     id: int
+    participant_user_id: int | None = None
     participant_name: str
     participant_avatar_url: str | None = None
     context_type: str | None = None
@@ -231,6 +250,56 @@ class OrgCommsMessageItem(BaseModel):
 
 class OrgCommsDialogDetail(BaseModel):
     dialog: OrgCommsDialogItem
+    context_hint: str | None = None
+    messages: list[OrgCommsMessageItem]
+
+
+class VolCommsDialogItem(BaseModel):
+    id: int
+    organization_id: int
+    organization_name: str
+    organization_logo_url: str | None = None
+    context_type: str | None = None
+    context_entity_id: int | None = None
+    context_title: str | None = None
+    last_message_preview: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+
+
+class VolCommsDialogListResponse(BaseModel):
+    total: int
+    unread_total: int = 0
+    items: list[VolCommsDialogItem]
+
+
+class VolCommsDialogDetail(BaseModel):
+    dialog: VolCommsDialogItem
+    context_hint: str | None = None
+    messages: list[OrgCommsMessageItem]
+
+
+class UserCommsDialogItem(BaseModel):
+    id: int
+    organization_id: int
+    organization_name: str
+    organization_logo_url: str | None = None
+    context_type: str | None = None
+    context_entity_id: int | None = None
+    context_title: str | None = None
+    last_message_preview: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+
+
+class UserCommsDialogListResponse(BaseModel):
+    total: int
+    unread_total: int = 0
+    items: list[UserCommsDialogItem]
+
+
+class UserCommsDialogDetail(BaseModel):
+    dialog: UserCommsDialogItem
     context_hint: str | None = None
     messages: list[OrgCommsMessageItem]
 
@@ -319,18 +388,22 @@ class OrgCabinetProfilePatchRequest(BaseModel):
     instructions: OrgCabinetInstructionsPatch | None = None
 
 
-class OrgIncomingAdoptionItem(BaseModel):
+class OrgIncomingAdoptionItem(AdoptionApplicationFormRead):
     id: int
     applicant_user_id: int
-    applicant_name: str
-    applicant_email: str
-    applicant_phone: str | None = None
     animal_id: int
     animal_name: str
     created_at: datetime
     status: str
     status_label: str
-    message: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Причина отклонения организацией (если статус rejected)",
+    )
+    chat_thread_id: str | None = Field(
+        default=None,
+        description="ID диалога с заявителем (org_chat_dialogs.id)",
+    )
 
 
 class OrgIncomingAdoptionListResponse(BaseModel):
@@ -405,11 +478,14 @@ class OrgOwnedHelpRequestItem(BaseModel):
     help_type: str
     animal_id: int | None = None
     animal_name: str | None = None
+    animal_photo_url: str | None = None
     status: str
     is_urgent: bool
     target_amount: float | None = None
     deadline_at: datetime | None = None
     deadline_note: str | None = None
+    payment_bank_account: str | None = None
+    uses_organization_payment_details: bool = True
     created_at: datetime
 
 
@@ -504,6 +580,7 @@ class OrgArticleItem(BaseModel):
     title: str
     category: str
     read_minutes: int
+    cover_url: str | None = None
     is_published: bool
     is_archived: bool
     created_at: datetime

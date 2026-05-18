@@ -1,22 +1,11 @@
-import math
-
-from sqlalchemy import func, or_
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session
 
+from app.core.geo import filter_sort_paginate_nearby
+from app.core.list_query import apply_city_filter, apply_text_search, geo_bbox_clauses
 from app.models.event import Event
 from app.models.organization import Organization
 from app.modules.events.schemas import EventFilterParams
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 6371.0
-    p = math.pi / 180
-    a = (
-        0.5
-        - math.cos((lat2 - lat1) * p) / 2
-        + math.cos(lat1 * p) * math.cos(lat2 * p) * (1 - math.cos((lon2 - lon1) * p)) / 2
-    )
-    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
 class EventRepository:
@@ -49,23 +38,14 @@ class EventRepository:
     def get_organization(self, organization_id: int) -> Organization | None:
         return self.db.query(Organization).filter(Organization.id == organization_id).first()
 
-    def list_events(self, filters: EventFilterParams) -> tuple[int, list[tuple[Event, Organization | None]]]:
+    def _list_events_query(self, filters: EventFilterParams):
         q = (
             self.db.query(Event, Organization)
             .outerjoin(Organization, Organization.id == Event.organization_id)
             .filter(Event.is_published.is_(True), Event.is_archived.is_(False))
         )
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            q = q.filter(
-                or_(
-                    func.lower(Event.title).like(like),
-                    func.lower(Event.summary).like(like),
-                    func.lower(Event.description).like(like),
-                )
-            )
-        if filters.city:
-            q = q.filter(func.lower(Event.city) == filters.city.lower())
+        q = apply_text_search(q, filters.q, Event.title, Event.summary)
+        q = apply_city_filter(q, Event.city, filters.city)
         if filters.format and filters.format != "all":
             q = q.filter(Event.format == filters.format)
         if filters.help_types:
@@ -74,21 +54,38 @@ class EventRepository:
             q = q.filter(Event.starts_at >= filters.starts_from)
         if filters.starts_to is not None:
             q = q.filter(Event.starts_at <= filters.starts_to)
+        return q
 
-        rows = q.all()
+    def list_events(self, filters: EventFilterParams) -> tuple[int, list[tuple[Event, Organization | None]]]:
+        q = self._list_events_query(filters)
+
         if filters.nearby and filters.latitude is not None and filters.longitude is not None:
-            kept: list[tuple[Event, Organization | None]] = []
-            for event, org in rows:
-                if event.latitude is None or event.longitude is None:
-                    continue
-                dist = _haversine_km(filters.latitude, filters.longitude, event.latitude, event.longitude)
-                if dist <= filters.radius_km:
-                    kept.append((event, org))
-            rows = kept
+            radius = filters.radius_km or 50.0
+            q = q.filter(
+                *geo_bbox_clauses(Event.latitude, Event.longitude, filters.latitude, filters.longitude, radius)
+            )
+            candidates: list[tuple[Event, Organization | None]] = q.all()
+            if filters.sort_by == "title":
+                sort_fn = lambda row: (row[0].title.lower(), row[0].id)
+            else:
+                sort_fn = lambda row: (row[0].starts_at, row[0].id)
 
+            return filter_sort_paginate_nearby(
+                candidates,
+                center_lat=filters.latitude,
+                center_lon=filters.longitude,
+                radius_km=radius,
+                get_lat_lon=lambda row: (row[0].latitude, row[0].longitude),
+                sort_key=sort_fn,
+                offset=filters.offset,
+                limit=filters.limit,
+            )
+
+        total = q.order_by(None).count()
         if filters.sort_by == "title":
-            rows.sort(key=lambda x: (x[0].title.lower(), x[0].id))
+            q = q.order_by(asc(Event.title), asc(Event.id))
         else:
-            rows.sort(key=lambda x: (x[0].starts_at, x[0].id))
-        total = len(rows)
-        return total, rows[filters.offset : filters.offset + filters.limit]
+            q = q.order_by(asc(Event.starts_at), asc(Event.id))
+
+        rows = q.offset(filters.offset).limit(filters.limit).all()
+        return total, rows

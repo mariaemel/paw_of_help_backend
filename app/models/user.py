@@ -26,7 +26,10 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    role: Mapped[UserRole] = mapped_column(SqlEnum(UserRole), default=UserRole.USER)
+    role: Mapped[UserRole] = mapped_column(
+        SqlEnum(UserRole, values_callable=lambda x: [e.value for e in x], native_enum=False),
+        default=UserRole.USER,
+    )
     is_email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     is_phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     personal_data_consent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

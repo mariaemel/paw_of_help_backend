@@ -1,6 +1,7 @@
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.list_query import apply_city_filter, apply_text_search
 from app.models.animal import Animal, AnimalPhoto
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.organization import Organization
@@ -102,16 +103,8 @@ class AnimalRepository:
             selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
         )
 
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            query = query.filter(
-                or_(
-                    func.lower(Animal.name).like(like),
-                    func.lower(Animal.full_description).like(like),
-                )
-            )
-        if filters.city:
-            query = query.filter(func.lower(Animal.location_city) == filters.city.lower())
+        query = apply_text_search(query, filters.q, Animal.name, Animal.full_description)
+        query = apply_city_filter(query, Animal.location_city, filters.city)
         if filters.status:
             query = query.filter(Animal.status == filters.status)
         if filters.sex:
@@ -151,7 +144,7 @@ class AnimalRepository:
         if filters.max_age_months is not None:
             query = query.filter(Animal.age_months <= filters.max_age_months)
 
-        total = query.count()
+        total = query.order_by(None).count()
 
         if filters.sort_by == "age_months":
             query = query.order_by(asc(Animal.age_months))

@@ -34,6 +34,7 @@ class HelpRequest(Base):
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     deadline_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     media_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    payment_bank_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open", index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

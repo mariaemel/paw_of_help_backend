@@ -1,6 +1,7 @@
-from sqlalchemy import func
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session
 
+from app.core.list_query import apply_text_search
 from app.models.knowledge import KnowledgeArticle
 from app.modules.knowledge.schemas import KnowledgeFilterParams
 
@@ -9,32 +10,31 @@ class KnowledgeRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def list_articles(self, filters: KnowledgeFilterParams) -> tuple[int, list[KnowledgeArticle]]:
+    def _list_articles_query(self, filters: KnowledgeFilterParams):
         q = self.db.query(KnowledgeArticle).filter(
             KnowledgeArticle.is_archived.is_(False),
             KnowledgeArticle.is_published.is_(True),
         )
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            q = q.filter(
-                (func.lower(KnowledgeArticle.title).like(like))
-                | (func.lower(KnowledgeArticle.summary).like(like))
-                | (func.lower(KnowledgeArticle.content).like(like))
-            )
+        q = apply_text_search(q, filters.q, KnowledgeArticle.title, KnowledgeArticle.summary)
         if filters.category and filters.category != "all":
             q = q.filter(KnowledgeArticle.category == filters.category)
         if filters.only_context_tips is True:
             q = q.filter(KnowledgeArticle.is_context_tip.is_(True))
+        return q
 
-        rows = q.all()
+    def list_articles(self, filters: KnowledgeFilterParams) -> tuple[int, list[KnowledgeArticle]]:
+        q = self._list_articles_query(filters)
+        total = q.order_by(None).count()
+
         if filters.sort_by == "title":
-            rows.sort(key=lambda x: (x.title.lower(), x.id))
+            q = q.order_by(asc(KnowledgeArticle.title), asc(KnowledgeArticle.id))
         elif filters.sort_by == "read_minutes":
-            rows.sort(key=lambda x: (x.read_minutes, x.id))
+            q = q.order_by(asc(KnowledgeArticle.read_minutes), asc(KnowledgeArticle.id))
         else:
-            rows.sort(key=lambda x: (x.created_at, x.id), reverse=True)
-        total = len(rows)
-        return total, rows[filters.offset : filters.offset + filters.limit]
+            q = q.order_by(desc(KnowledgeArticle.created_at), desc(KnowledgeArticle.id))
+
+        rows = q.offset(filters.offset).limit(filters.limit).all()
+        return total, rows
 
     def get_article(self, article_id: int) -> KnowledgeArticle | None:
         return (

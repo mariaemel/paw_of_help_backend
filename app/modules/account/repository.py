@@ -7,10 +7,11 @@ from app.models.help_request import HelpRequest
 from app.models.org_chat import OrgChatDialog, OrgChatMessage
 from app.models.event import Event
 from app.models.knowledge import KnowledgeArticle
+from app.models.organization import Organization
 from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.volunteer_competency import VolunteerCompetencyAssignment
 from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
 
@@ -258,7 +259,10 @@ class AccountRepository:
     ) -> list[HelpRequest]:
         query = (
             self.db.query(HelpRequest)
-            .options(joinedload(HelpRequest.animal))
+            .options(
+                joinedload(HelpRequest.organization),
+                joinedload(HelpRequest.animal).joinedload(Animal.photos),
+            )
             .filter(HelpRequest.organization_id == organization_id)
         )
         if q and q.strip():
@@ -465,10 +469,183 @@ class AccountRepository:
         self.db.query(OrgChatMessage).filter(
             OrgChatMessage.dialog_id == dialog_id,
             OrgChatMessage.read_by_org_at.is_(None),
-            OrgChatMessage.sender_role != "organization",
+            OrgChatMessage.sender_role != UserRole.ORGANIZATION.value,
         ).update({OrgChatMessage.read_by_org_at: now_expr}, synchronize_session=False)
         self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
             {OrgChatDialog.unread_count_org: 0}, synchronize_session=False
+        )
+
+    def mark_dialog_messages_read_by_volunteer(self, dialog_id: int) -> None:
+        now_expr = func.datetime("now")
+        self.db.query(OrgChatMessage).filter(
+            OrgChatMessage.dialog_id == dialog_id,
+            OrgChatMessage.read_by_volunteer_at.is_(None),
+            OrgChatMessage.sender_role != UserRole.VOLUNTEER.value,
+        ).update({OrgChatMessage.read_by_volunteer_at: now_expr}, synchronize_session=False)
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_volunteer: 0}, synchronize_session=False
+        )
+
+    def find_org_dialog_by_org_and_participant(
+        self, organization_id: int, participant_user_id: int
+    ) -> OrgChatDialog | None:
+        return (
+            self.db.query(OrgChatDialog)
+            .filter(
+                OrgChatDialog.organization_id == organization_id,
+                OrgChatDialog.participant_user_id == participant_user_id,
+            )
+            .order_by(
+                OrgChatDialog.last_message_at.desc().nullslast(),
+                OrgChatDialog.updated_at.desc(),
+                OrgChatDialog.id.desc(),
+            )
+            .first()
+        )
+
+    def participant_is_volunteer(self, user_id: int) -> bool:
+        role = self.db.query(User.role).filter(User.id == user_id).scalar()
+        if role is None:
+            return False
+        return str(role) == UserRole.VOLUNTEER.value
+
+    def participant_is_user(self, user_id: int) -> bool:
+        role = self.db.query(User.role).filter(User.id == user_id).scalar()
+        if role is None:
+            return False
+        return str(role) == UserRole.USER.value
+
+    def get_user_by_id_with_profiles(self, user_id: int) -> User | None:
+        return (
+            self.db.query(User)
+            .options(
+                joinedload(User.volunteer_profile),
+                joinedload(User.user_profile),
+            )
+            .filter(User.id == user_id)
+            .first()
+        )
+
+    def list_volunteer_dialog_rows(
+        self, volunteer_user_id: int, q: str | None, limit: int, offset: int
+    ) -> tuple[int, int, list[tuple[OrgChatDialog, Organization]]]:
+        query = (
+            self.db.query(OrgChatDialog, Organization)
+            .join(Organization, Organization.id == OrgChatDialog.organization_id)
+            .filter(OrgChatDialog.participant_user_id == volunteer_user_id)
+        )
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(Organization.name).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.context_title, "")).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.last_message_preview, "")).like(like),
+                )
+            )
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(
+                OrgChatDialog.last_message_at.desc().nullslast(),
+                OrgChatDialog.updated_at.desc(),
+                OrgChatDialog.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        unread_total = int(
+            self.db.query(func.coalesce(func.sum(OrgChatDialog.unread_count_volunteer), 0))
+            .filter(OrgChatDialog.participant_user_id == volunteer_user_id)
+            .scalar()
+            or 0
+        )
+        return total, unread_total, rows
+
+    def get_volunteer_dialog_row(
+        self, volunteer_user_id: int, dialog_id: int
+    ) -> tuple[OrgChatDialog, Organization] | None:
+        row = (
+            self.db.query(OrgChatDialog, Organization)
+            .join(Organization, Organization.id == OrgChatDialog.organization_id)
+            .filter(
+                OrgChatDialog.id == dialog_id,
+                OrgChatDialog.participant_user_id == volunteer_user_id,
+            )
+            .first()
+        )
+        return row if row else None
+
+    def list_user_dialog_rows(
+        self, user_id: int, q: str | None, limit: int, offset: int
+    ) -> tuple[int, int, list[tuple[OrgChatDialog, Organization]]]:
+        query = (
+            self.db.query(OrgChatDialog, Organization)
+            .join(Organization, Organization.id == OrgChatDialog.organization_id)
+            .filter(OrgChatDialog.participant_user_id == user_id)
+        )
+        if q and q.strip():
+            like = f"%{q.strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(Organization.name).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.context_title, "")).like(like),
+                    func.lower(func.coalesce(OrgChatDialog.last_message_preview, "")).like(like),
+                )
+            )
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(
+                OrgChatDialog.last_message_at.desc().nullslast(),
+                OrgChatDialog.updated_at.desc(),
+                OrgChatDialog.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        unread_total = int(
+            self.db.query(func.coalesce(func.sum(OrgChatDialog.unread_count_user), 0))
+            .filter(OrgChatDialog.participant_user_id == user_id)
+            .scalar()
+            or 0
+        )
+        return total, unread_total, rows
+
+    def get_user_dialog_row(
+        self, user_id: int, dialog_id: int
+    ) -> tuple[OrgChatDialog, Organization] | None:
+        row = (
+            self.db.query(OrgChatDialog, Organization)
+            .join(Organization, Organization.id == OrgChatDialog.organization_id)
+            .filter(
+                OrgChatDialog.id == dialog_id,
+                OrgChatDialog.participant_user_id == user_id,
+            )
+            .first()
+        )
+        return row if row else None
+
+    def mark_dialog_messages_read_by_user(self, dialog_id: int) -> None:
+        now_expr = func.datetime("now")
+        self.db.query(OrgChatMessage).filter(
+            OrgChatMessage.dialog_id == dialog_id,
+            OrgChatMessage.read_by_user_at.is_(None),
+            OrgChatMessage.sender_role != UserRole.USER.value,
+        ).update({OrgChatMessage.read_by_user_at: now_expr}, synchronize_session=False)
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_user: 0}, synchronize_session=False
+        )
+
+    def dialog_has_organization_message(self, dialog_id: int) -> bool:
+        return (
+            self.db.query(OrgChatMessage.id)
+            .filter(
+                OrgChatMessage.dialog_id == dialog_id,
+                OrgChatMessage.sender_role == UserRole.ORGANIZATION.value,
+            )
+            .first()
+            is not None
         )
 
     def create_org_message(
@@ -496,6 +673,25 @@ class AccountRepository:
             p = p[:499].rstrip() + "…"
         dialog.last_message_preview = p or None
         dialog.last_message_at = created_at
+        dialog.updated_at = created_at
+
+    def increment_dialog_unread_for_volunteer(self, dialog_id: int) -> None:
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_volunteer: OrgChatDialog.unread_count_volunteer + 1},
+            synchronize_session=False,
+        )
+
+    def increment_dialog_unread_for_org(self, dialog_id: int) -> None:
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_org: OrgChatDialog.unread_count_org + 1},
+            synchronize_session=False,
+        )
+
+    def increment_dialog_unread_for_user(self, dialog_id: int) -> None:
+        self.db.query(OrgChatDialog).filter(OrgChatDialog.id == dialog_id).update(
+            {OrgChatDialog.unread_count_user: OrgChatDialog.unread_count_user + 1},
+            synchronize_session=False,
+        )
 
     def list_org_reports(self, organization_id: int, limit: int, offset: int) -> tuple[int, list[OrganizationReport]]:
         query = self.db.query(OrganizationReport).filter(OrganizationReport.organization_id == organization_id)

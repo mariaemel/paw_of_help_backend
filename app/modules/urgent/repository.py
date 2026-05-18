@@ -1,6 +1,7 @@
-from sqlalchemy import func, or_
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.list_query import apply_city_filter, apply_text_search
 from app.models.animal import Animal
 from app.models.help_request import HelpRequest
 from app.models.organization import Organization
@@ -54,35 +55,40 @@ class UrgentRepository:
         ]
         return cities, species
 
-    def list_public_urgent(self, filters: UrgentFilterParams) -> tuple[int, list[HelpRequest]]:
-        q = (
-            self.db.query(HelpRequest)
-            .options(joinedload(HelpRequest.organization), joinedload(HelpRequest.animal).joinedload(Animal.photos))
-            .filter(
-                HelpRequest.is_archived.is_(False),
-                HelpRequest.is_published.is_(True),
-                HelpRequest.is_urgent.is_(True),
-            )
+    def _list_public_urgent_query(self, filters: UrgentFilterParams):
+        q = self.db.query(HelpRequest).filter(
+            HelpRequest.is_archived.is_(False),
+            HelpRequest.is_published.is_(True),
+            HelpRequest.is_urgent.is_(True),
         )
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            q = q.filter(
-                or_(
-                    func.lower(HelpRequest.title).like(like),
-                    func.lower(HelpRequest.description).like(like),
-                )
-            )
-        if filters.city:
-            q = q.filter(func.lower(HelpRequest.city) == filters.city.lower())
+        q = apply_text_search(q, filters.q, HelpRequest.title, HelpRequest.description)
+        q = apply_city_filter(q, HelpRequest.city, filters.city)
         if filters.help_types:
             q = q.filter(HelpRequest.help_type.in_(filters.help_types))
         if filters.animal_species and filters.animal_species != "all":
             q = q.join(Animal, Animal.id == HelpRequest.animal_id).filter(Animal.species == filters.animal_species)
+        return q
 
-        rows = q.all()
+    def list_public_urgent(self, filters: UrgentFilterParams) -> tuple[int, list[HelpRequest]]:
+        q = self._list_public_urgent_query(filters)
+        total = q.order_by(None).count()
+
         if filters.sort_by == "deadline":
-            rows.sort(key=lambda x: (x.deadline_at is None, x.deadline_at))
+            q = q.order_by(
+                asc(HelpRequest.deadline_at.is_(None)),
+                asc(HelpRequest.deadline_at),
+                desc(HelpRequest.id),
+            )
         else:
-            rows.sort(key=lambda x: (x.created_at, x.id), reverse=True)
-        total = len(rows)
-        return total, rows[filters.offset : filters.offset + filters.limit]
+            q = q.order_by(desc(HelpRequest.created_at), desc(HelpRequest.id))
+
+        rows = (
+            q.options(
+                joinedload(HelpRequest.organization),
+                joinedload(HelpRequest.animal).joinedload(Animal.photos),
+            )
+            .offset(filters.offset)
+            .limit(filters.limit)
+            .all()
+        )
+        return total, rows

@@ -34,6 +34,12 @@ def require_volunteer_role(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_plain_user_role(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.USER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для пользователей")
+    return user
+
+
 def require_organization_role(user: User = Depends(get_current_user)) -> User:
     if user.role != UserRole.ORGANIZATION:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для организаций")
@@ -167,7 +173,6 @@ def cancel_my_volunteer_response(
     user: User = Depends(require_volunteer_role),
     service: AccountService = Depends(get_account_service),
 ):
-    """Отменить отклик (только «На рассмотрении»)."""
     return service.withdraw_volunteer_response(user, response_id)
 
 
@@ -178,7 +183,6 @@ def submit_my_volunteer_response_report(
     user: User = Depends(require_volunteer_role),
     service: AccountService = Depends(get_account_service),
 ):
-    """Отправить или обновить отчёт (только «В работе»)."""
     return service.submit_volunteer_response_report(user, response_id, payload)
 
 
@@ -188,8 +192,104 @@ def get_my_volunteer_response_report(
     user: User = Depends(require_volunteer_role),
     service: AccountService = Depends(get_account_service),
 ):
-    """Просмотр отчёта (завершённые отклики)."""
     return service.get_volunteer_response_report(user, response_id)
+
+
+@router.get("/user/communications/dialogs", response_model=s.UserCommsDialogListResponse)
+def list_user_dialogs(
+    q: str | None = Query(default=None, description="Поиск по организации и контексту"),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_plain_user_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.list_user_dialogs(user, q, limit, offset)
+
+
+@router.get("/user/communications/dialogs/{dialog_id}", response_model=s.UserCommsDialogDetail)
+def get_user_dialog(
+    dialog_id: int,
+    user: User = Depends(require_plain_user_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.get_user_dialog(user, dialog_id)
+
+
+@router.post(
+    "/user/communications/dialogs/{dialog_id}/messages",
+    response_model=s.OrgCommsMessageItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_user_dialog_message(
+    dialog_id: int,
+    body: str = Form(
+        default="",
+        max_length=8000,
+        description="Текст сообщения; можно оставить пустым, если прикреплено фото",
+    ),
+    image: UploadFile | None = File(
+        default=None,
+        description="Изображение (.jpg, .jpeg, .png, .webp), до 5 МБ",
+    ),
+    user: User = Depends(require_plain_user_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.create_user_dialog_message(user, dialog_id, body, image)
+
+
+@router.get("/volunteer/communications/dialogs", response_model=s.VolCommsDialogListResponse)
+def list_volunteer_dialogs(
+    q: str | None = Query(default=None, description="Поиск по организации и контексту"),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.list_volunteer_dialogs(user, q, limit, offset)
+
+
+@router.get("/volunteer/communications/dialogs/{dialog_id}", response_model=s.VolCommsDialogDetail)
+def get_volunteer_dialog(
+    dialog_id: int,
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.get_volunteer_dialog(user, dialog_id)
+
+
+@router.post(
+    "/volunteer/communications/dialogs/{dialog_id}/messages",
+    response_model=s.OrgCommsMessageItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_volunteer_dialog_message(
+    dialog_id: int,
+    body: str = Form(
+        default="",
+        max_length=8000,
+        description="Текст сообщения; можно оставить пустым, если прикреплено фото",
+    ),
+    image: UploadFile | None = File(
+        default=None,
+        description="Изображение (.jpg, .jpeg, .png, .webp), до 5 МБ",
+    ),
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.create_volunteer_dialog_message(user, dialog_id, body, image)
+
+
+@router.post(
+    "/organization/communications/dialogs",
+    response_model=s.OrgCommsDialogItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def open_org_dialog_with_participant(
+    payload: s.OrgCommsDialogOpenRequest,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.open_org_dialog_with_participant(user, payload)
 
 
 @router.get("/organization/communications/dialogs", response_model=s.OrgCommsDialogListResponse)
@@ -345,6 +445,19 @@ def get_org_incoming_adoption(
     service: AccountService = Depends(get_account_service),
 ):
     return service.get_org_incoming_adoption(user, application_id)
+
+
+@router.post(
+    "/organization/incoming/adoptions/{application_id}/dialog",
+    response_model=s.OrgCommsDialogItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def open_org_dialog_for_adoption(
+    application_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.open_org_dialog_for_adoption(user, application_id)
 
 
 @router.post("/organization/incoming/adoptions/{application_id}/approve", response_model=s.OrgIncomingAdoptionItem)

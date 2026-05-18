@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
-    database_url: str = "sqlite:///./paw_of_help.db"
+    database_url: str = "postgresql+psycopg://paw:paw@localhost:5432/paw_of_help"
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
     media_dir: str = "media"
     media_url_prefix: str = "/media"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"

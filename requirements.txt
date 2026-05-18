@@ -1,8 +1,11 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-pydantic-settings
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27
+sqlalchemy>=2.0,<3
+alembic>=1.13,<2
+psycopg[binary]>=3.1,<4
+pydantic-settings>=2
 email-validator
 python-jose[cryptography]
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
 python-multipart

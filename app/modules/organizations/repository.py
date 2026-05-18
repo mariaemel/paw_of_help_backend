@@ -1,9 +1,8 @@
-import json
-import math
-
-from sqlalchemy import func, or_
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.geo import filter_sort_paginate_nearby
+from app.core.list_query import apply_city_filter, apply_text_search, geo_bbox_clauses
 from app.models.animal import Animal
 from app.models.event import Event
 from app.models.help_request import HelpRequest
@@ -12,17 +11,6 @@ from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.organization import Organization
 from app.modules.organizations.schemas import OrganizationFilterParams
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 6371.0
-    p = math.pi / 180
-    a = (
-        0.5
-        - math.cos((lat2 - lat1) * p) / 2
-        + math.cos(lat1 * p) * math.cos(lat2 * p) * (1 - math.cos((lon2 - lon1) * p)) / 2
-    )
-    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
 class OrganizationRepository:
@@ -41,7 +29,7 @@ class OrganizationRepository:
         specs = ["cat", "dog", "both"]
         needs_opts = [
             {"id": "urgent", "label": "Срочно"},
-            {"id": "volunteers", "label": "Нужны волонтеры"},
+            {"id": "volunteers", "label": "Нужны волонтёры"},
             {"id": "foster", "label": "Нужна передержка"},
             {"id": "financial", "label": "Финансовая помощь"},
             {"id": "items", "label": "Помощь вещами / кормом"},
@@ -50,66 +38,65 @@ class OrganizationRepository:
         ]
         return cities, specs, needs_opts
 
-    def list_organizations(self, filters: OrganizationFilterParams) -> tuple[int, list[Organization]]:
+    def _list_organizations_query(self, filters: OrganizationFilterParams):
         q = self.db.query(Organization)
-
-        if filters.q:
-            like = f"%{filters.q.lower()}%"
-            q = q.filter(
-                or_(
-                    func.lower(Organization.name).like(like),
-                    func.lower(Organization.description).like(like),
-                    func.lower(func.coalesce(Organization.tagline, "")).like(like),
-                )
-            )
-        if filters.city:
-            q = q.filter(func.lower(Organization.city) == filters.city.lower())
+        q = apply_text_search(
+            q,
+            filters.q,
+            Organization.name,
+            Organization.tagline,
+            Organization.description,
+        )
+        q = apply_city_filter(q, Organization.city, filters.city)
         if filters.specialization and filters.specialization != "all":
             if filters.specialization in ("cat", "dog"):
                 q = q.filter(
-                    or_(
-                        Organization.specialization == filters.specialization,
-                        Organization.specialization == "both",
-                    )
+                    Organization.specialization.in_((filters.specialization, "both"))
                 )
-
-        rows = q.all()
         if filters.needs:
-            filtered = []
-            for org in rows:
-                raw = org.needs_json or "[]"
-                try:
-                    arr = json.loads(raw)
-                except json.JSONDecodeError:
-                    arr = []
-                if not isinstance(arr, list):
-                    arr = []
-                if all(n in arr for n in filters.needs):
-                    filtered.append(org)
-            rows = filtered
+            for need in filters.needs:
+                q = q.filter(Organization.needs_json.like(f'%"{need}"%'))
+        return q
+
+    def list_organizations(self, filters: OrganizationFilterParams) -> tuple[int, list[Organization]]:
+        q = self._list_organizations_query(filters)
 
         if filters.nearby and filters.latitude is not None and filters.longitude is not None:
-            nearby_rows = []
-            rmax = filters.radius_km or 50.0
-            for org in rows:
-                if org.latitude is None or org.longitude is None:
-                    continue
-                d = _haversine_km(filters.latitude, filters.longitude, org.latitude, org.longitude)
-                if d <= rmax:
-                    nearby_rows.append(org)
-            rows = nearby_rows
+            radius = filters.radius_km or 50.0
+            q = q.filter(
+                *geo_bbox_clauses(
+                    Organization.latitude, Organization.longitude, filters.latitude, filters.longitude, radius
+                )
+            )
+            candidates = q.all()
+            if filters.sort_by == "-wards":
+                sort_fn = lambda o: (-(o.wards_count or 0), o.name.lower(), o.id)
+            elif filters.sort_by == "city":
+                sort_fn = lambda o: (o.city or "", o.name.lower(), o.id)
+            else:
+                sort_fn = lambda o: (o.name.lower(), o.id)
 
-        total = len(rows)
+            return filter_sort_paginate_nearby(
+                candidates,
+                center_lat=filters.latitude,
+                center_lon=filters.longitude,
+                radius_km=radius,
+                get_lat_lon=lambda o: (o.latitude, o.longitude),
+                sort_key=sort_fn,
+                offset=filters.offset,
+                limit=filters.limit,
+            )
 
+        total = q.order_by(None).count()
         if filters.sort_by == "-wards":
-            rows.sort(key=lambda o: o.wards_count, reverse=True)
+            q = q.order_by(desc(Organization.wards_count), asc(Organization.name), asc(Organization.id))
         elif filters.sort_by == "city":
-            rows.sort(key=lambda o: (o.city or "", o.name))
+            q = q.order_by(asc(Organization.city), asc(Organization.name), asc(Organization.id))
         else:
-            rows.sort(key=lambda o: o.name.lower())
+            q = q.order_by(asc(Organization.name), asc(Organization.id))
 
-        chunk = rows[filters.offset : filters.offset + filters.limit]
-        return total, chunk
+        rows = q.offset(filters.offset).limit(filters.limit).all()
+        return total, rows
 
     def get_owned_by_user(self, owner_user_id: int) -> Organization | None:
         return (

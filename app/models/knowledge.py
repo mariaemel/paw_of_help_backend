@@ -16,6 +16,7 @@ class KnowledgeArticle(Base):
     owner_role: Mapped[str] = mapped_column(String(20), default="organization", index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cover_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(40), index=True)
     read_minutes: Mapped[int] = mapped_column(Integer, default=5)

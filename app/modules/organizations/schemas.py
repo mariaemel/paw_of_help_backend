@@ -75,6 +75,7 @@ class OrgPublicHelpSection(BaseModel):
     title: str
     description: str
     primary_action: str = Field(description="help | respond | contact — сценарий для кнопки на клиенте")
+    image_url: str | None = None
 
 
 class OrgPublicUrgentNeed(BaseModel):
@@ -130,6 +131,7 @@ class OrgPublicArticle(BaseModel):
     title: str
     category: str
     read_minutes: int
+    cover_url: str | None = None
 
 
 class OrgPublicHomeStory(BaseModel):

@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paw
+      POSTGRES_PASSWORD: paw
+      POSTGRES_DB: paw_of_help
+    ports:
+      - "5432:5432"
+    volumes:
+      - paw_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paw -d paw_of_help"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  paw_pg_data:

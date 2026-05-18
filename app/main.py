@@ -5,8 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.db.base import Base
-from app.db.migrate import ensure_sqlite_schema
+from app.db.bootstrap import init_db
 from app.db.seed import seed_demo_data_if_empty
 from app.db.session import SessionLocal, engine
 from app.modules.account.router import router as account_router
@@ -37,8 +36,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    ensure_sqlite_schema(engine)
-    Base.metadata.create_all(bind=engine)
+    init_db(engine)
     if settings.seed_demo_data:
         db = SessionLocal()
         try:

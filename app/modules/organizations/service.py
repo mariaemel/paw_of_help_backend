@@ -112,7 +112,18 @@ def _help_sections(org) -> list[OrgPublicHelpSection]:
                     base[k]["description"] = str(row["description"])
                 if row.get("primary_action"):
                     base[k]["primary_action"] = str(row["primary_action"])
-    return [OrgPublicHelpSection(**base[row["kind"]]) for row in DEFAULT_HELP_SECTIONS]
+                if row.get("image_path"):
+                    base[k]["image_path"] = str(row["image_path"])
+    return [
+        OrgPublicHelpSection(
+            kind=row["kind"],
+            title=base[row["kind"]]["title"],
+            description=base[row["kind"]]["description"],
+            primary_action=base[row["kind"]]["primary_action"],
+            image_url=_media_url(base[row["kind"]].get("image_path")),
+        )
+        for row in DEFAULT_HELP_SECTIONS
+    ]
 
 
 def _ward_status_label(code: str) -> str:
@@ -301,6 +312,7 @@ class OrganizationService:
                         title=art.title,
                         category=art.category,
                         read_minutes=art.read_minutes,
+                        cover_url=_media_url(getattr(art, "cover_path", None)),
                     )
                 )
 

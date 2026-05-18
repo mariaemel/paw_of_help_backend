@@ -7,10 +7,16 @@ from app.core.config import settings
 from app.models.help_request import HelpRequest
 from app.models.organization import Organization
 from app.models.user import User, UserRole
+from app.modules.help_requests.requisites import (
+    effective_payment_bank_account,
+    stored_payment_bank_account,
+    uses_organization_payment_details,
+)
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.schemas import (
     HELP_TYPE_OPTIONS,
     CatalogOption,
+    HelpRequestPaymentDetails,
     UrgentCatalogsResponse,
     UrgentFilterParams,
     UrgentListResponse,
@@ -52,11 +58,26 @@ class UrgentService:
         return deadline_at.strftime("До %d.%m %H:%M")
 
     @staticmethod
-    def _primary_photo_url(req: HelpRequest) -> str | None:
+    def _animal_photo_url(req: HelpRequest) -> str | None:
         if req.animal is None or not req.animal.photos:
-            return f"{settings.media_url_prefix}/{req.media_path}" if req.media_path else None
+            return None
         primary = next((p for p in req.animal.photos if p.is_primary), None) or req.animal.photos[0]
         return f"{settings.media_url_prefix}/{primary.file_path}"
+
+    @staticmethod
+    def _primary_photo_url(req: HelpRequest) -> str | None:
+        animal_url = UrgentService._animal_photo_url(req)
+        if animal_url:
+            return animal_url
+        return f"{settings.media_url_prefix}/{req.media_path}" if req.media_path else None
+
+    @staticmethod
+    def _payment_details_payload(req: HelpRequest) -> HelpRequestPaymentDetails:
+        return HelpRequestPaymentDetails(bank_account=effective_payment_bank_account(req))
+
+    @staticmethod
+    def _apply_payment_bank_account(req: HelpRequest, org: Organization, bank_account: str | None) -> None:
+        req.payment_bank_account = stored_payment_bank_account(org, bank_account)
 
     def _to_item(self, req: HelpRequest) -> UrgentRequestListItem:
         badges: list[str] = []
@@ -65,6 +86,8 @@ class UrgentService:
         badges.append(_HELP_TYPE_LABEL.get(req.help_type, req.help_type))
         if req.volunteer_needed:
             badges.append("нужен волонтер")
+        photo = self._primary_photo_url(req)
+        animal_photo = self._animal_photo_url(req)
         return UrgentRequestListItem(
             id=req.id,
             title=req.title,
@@ -83,7 +106,10 @@ class UrgentService:
             deadline_label=self._deadline_label(req.deadline_at, req.deadline_note),
             status=req.status,
             target_amount=req.target_amount,
-            primary_photo_url=self._primary_photo_url(req),
+            primary_photo_url=photo,
+            animal_photo_url=animal_photo,
+            payment_details=self._payment_details_payload(req),
+            uses_organization_payment_details=uses_organization_payment_details(req),
             badges=badges,
         )
 
@@ -99,6 +125,7 @@ class UrgentService:
                 comps = []
         return UrgentRequestDetail(
             **item.model_dump(),
+            bank_account_override=req.payment_bank_account if not uses_organization_payment_details(req) else None,
             address=req.address,
             latitude=req.latitude,
             longitude=req.longitude,
@@ -129,6 +156,12 @@ class UrgentService:
     def get_detail(self, request_id: int) -> UrgentRequestDetail:
         req = self.repo.get_request(request_id)
         if req is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
+        return self._to_detail(req)
+
+    def get_detail_for_owner(self, request_id: int, organization_id: int) -> UrgentRequestDetail:
+        req = self.repo.get_request_for_owner(request_id)
+        if req is None or req.organization_id != organization_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
         return self._to_detail(req)
 
@@ -165,9 +198,10 @@ class UrgentService:
             is_published=payload.is_published,
             is_archived=False,
         )
+        self._apply_payment_bank_account(req, org, payload.bank_account)
         self.repo.db.add(req)
         self.repo.db.commit()
-        return self.get_detail(req.id)
+        return self.get_detail_for_owner(req.id, org.id)
 
     def update_request(self, request_id: int, user: User, payload: UrgentRequestUpdate) -> UrgentRequestDetail:
         org = self._organization_for_user(user)
@@ -176,16 +210,22 @@ class UrgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
         if req.organization_id != org.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
-        if payload.animal_id is not None:
-            animal = self.repo.get_animal(payload.animal_id)
-            if animal is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
-            if animal.organization_id != req.organization_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Animal must belong to same organization",
-                )
-            req.animal_id = payload.animal_id
+
+        patch_data = payload.model_dump(exclude_unset=True)
+        if "animal_id" in patch_data:
+            aid = patch_data["animal_id"]
+            if aid is None:
+                req.animal_id = None
+            else:
+                animal = self.repo.get_animal(aid)
+                if animal is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+                if animal.organization_id != req.organization_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Animal must belong to same organization",
+                    )
+                req.animal_id = aid
 
         for field in (
             "title",
@@ -210,8 +250,10 @@ class UrgentService:
                 setattr(req, field, value)
         if payload.volunteer_competencies is not None:
             req.volunteer_competencies_json = json.dumps(payload.volunteer_competencies, ensure_ascii=False)
+        if "bank_account" in payload.model_fields_set:
+            self._apply_payment_bank_account(req, org, payload.bank_account)
         self.repo.db.commit()
-        return self.get_detail(req.id)
+        return self.get_detail_for_owner(req.id, org.id)
 
     def close_request(self, request_id: int, user: User) -> UrgentRequestDetail:
         org = self._organization_for_user(user)
@@ -222,5 +264,4 @@ class UrgentService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
         req.status = "closed"
         self.repo.db.commit()
-        self.repo.db.refresh(req)
-        return self._to_detail(req)
+        return self.get_detail_for_owner(req.id, org.id)

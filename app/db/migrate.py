@@ -162,15 +162,14 @@ def _seed_volunteer_competency_items_if_empty(conn) -> None:
     for slug, label, sort_order in _VOLUNTEER_COMPETENCY_SEED:
         conn.execute(
             text(
-                "INSERT INTO volunteer_competency_items (slug, label, sort_order, is_active) "
-                "VALUES (:slug, :label, :so, 1)"
+                "INSERT OR IGNORE INTO volunteer_competency_items "
+                "(slug, label, sort_order, is_active) VALUES (:slug, :label, :so, 1)"
             ),
             {"slug": slug, "label": label, "so": sort_order},
         )
 
 
 def _merge_volunteer_competency_catalog(conn) -> None:
-    """Добавляет новые компетенции и подтягивает подписи (после расширения ТЗ)."""
     if not _has_table(conn, "volunteer_competency_items"):
         return
     existing = {
@@ -181,8 +180,8 @@ def _merge_volunteer_competency_catalog(conn) -> None:
         if slug not in existing:
             conn.execute(
                 text(
-                    "INSERT INTO volunteer_competency_items (slug, label, sort_order, is_active) "
-                    "VALUES (:slug, :label, :so, 1)"
+                    "INSERT OR IGNORE INTO volunteer_competency_items "
+                    "(slug, label, sort_order, is_active) VALUES (:slug, :label, :so, 1)"
                 ),
                 {"slug": slug, "label": label, "so": sort_order},
             )
@@ -262,22 +261,27 @@ def ensure_sqlite_schema(engine: Engine) -> None:
         return
 
     with engine.begin() as conn:
-        rows = conn.execute(text("PRAGMA table_info('users')")).fetchall()
-        columns = {row[1] for row in rows}
+        if _has_table(conn, "users"):
+            rows = conn.execute(text("PRAGMA table_info('users')")).fetchall()
+            columns = {row[1] for row in rows}
 
-        if "phone" not in columns:
-            conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(32)"))
-            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users (phone)"))
+            if "phone" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(32)"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users (phone)"))
 
-        if "is_email_verified" not in columns:
-            conn.execute(text("ALTER TABLE users ADD COLUMN is_email_verified BOOLEAN DEFAULT 0 NOT NULL"))
+            if "is_email_verified" not in columns:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN is_email_verified BOOLEAN DEFAULT 0 NOT NULL")
+                )
 
-        if "is_phone_verified" not in columns:
-            conn.execute(text("ALTER TABLE users ADD COLUMN is_phone_verified BOOLEAN DEFAULT 0 NOT NULL"))
+            if "is_phone_verified" not in columns:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN is_phone_verified BOOLEAN DEFAULT 0 NOT NULL")
+                )
 
-        cols_u = _table_columns(conn, "users")
-        if "personal_data_consent_at" not in cols_u:
-            conn.execute(text("ALTER TABLE users ADD COLUMN personal_data_consent_at DATETIME"))
+            cols_u = _table_columns(conn, "users")
+            if "personal_data_consent_at" not in cols_u:
+                conn.execute(text("ALTER TABLE users ADD COLUMN personal_data_consent_at DATETIME"))
 
         if not _has_table(conn, "organizations"):
             conn.execute(
@@ -419,6 +423,8 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         last_message_preview VARCHAR(500),
                         last_message_at DATETIME,
                         unread_count_org INTEGER NOT NULL,
+                        unread_count_volunteer INTEGER NOT NULL DEFAULT 0,
+                        unread_count_user INTEGER NOT NULL DEFAULT 0,
                         created_at DATETIME,
                         updated_at DATETIME,
                         PRIMARY KEY (id),
@@ -440,6 +446,26 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     "ON org_chat_dialogs (last_message_at)"
                 )
             )
+        else:
+            ocd_cols = _table_columns(conn, "org_chat_dialogs")
+            if "unread_count_volunteer" not in ocd_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE org_chat_dialogs ADD COLUMN unread_count_volunteer INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            if "unread_count_user" not in ocd_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE org_chat_dialogs ADD COLUMN unread_count_user INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_org_chat_dialogs_org_participant "
+                    "ON org_chat_dialogs (organization_id, participant_user_id)"
+                )
+            )
 
         if not _has_table(conn, "org_chat_messages"):
             conn.execute(
@@ -454,6 +480,8 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         photo_path VARCHAR(500),
                         created_at DATETIME,
                         read_by_org_at DATETIME,
+                        read_by_volunteer_at DATETIME,
+                        read_by_user_at DATETIME,
                         PRIMARY KEY (id),
                         FOREIGN KEY(dialog_id) REFERENCES org_chat_dialogs (id) ON DELETE CASCADE,
                         FOREIGN KEY(sender_user_id) REFERENCES users (id) ON DELETE SET NULL
@@ -478,6 +506,10 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             ocm_cols = _table_columns(conn, "org_chat_messages")
             if "photo_path" not in ocm_cols:
                 conn.execute(text("ALTER TABLE org_chat_messages ADD COLUMN photo_path VARCHAR(500)"))
+            if "read_by_volunteer_at" not in ocm_cols:
+                conn.execute(text("ALTER TABLE org_chat_messages ADD COLUMN read_by_volunteer_at DATETIME"))
+            if "read_by_user_at" not in ocm_cols:
+                conn.execute(text("ALTER TABLE org_chat_messages ADD COLUMN read_by_user_at DATETIME"))
 
         if _has_table(conn, "org_notifications"):
             conn.execute(text("DROP TABLE org_notifications"))
@@ -492,6 +524,7 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         owner_role VARCHAR(20) NOT NULL,
                         title VARCHAR(255) NOT NULL,
                         summary VARCHAR(500),
+                        cover_path VARCHAR(500),
                         content TEXT NOT NULL,
                         category VARCHAR(40) NOT NULL,
                         read_minutes INTEGER NOT NULL,
@@ -518,6 +551,10 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     "ON knowledge_articles (is_context_tip)"
                 )
             )
+        elif _has_table(conn, "knowledge_articles"):
+            ka_cols = _table_columns(conn, "knowledge_articles")
+            if "cover_path" not in ka_cols:
+                conn.execute(text("ALTER TABLE knowledge_articles ADD COLUMN cover_path VARCHAR(500)"))
 
         if not _has_table(conn, "events"):
             conn.execute(
@@ -575,6 +612,7 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         deadline_at DATETIME,
                         deadline_note VARCHAR(255),
                         media_path VARCHAR(500),
+                        payment_bank_account VARCHAR(64),
                         status VARCHAR(20) NOT NULL,
                         is_published BOOLEAN NOT NULL,
                         is_archived BOOLEAN NOT NULL,
@@ -595,7 +633,9 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_is_urgent ON help_requests (is_urgent)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_help_requests_deadline_at ON help_requests (deadline_at)"))
         else:
-            _drop_sqlite_columns_if_exist(conn, "help_requests", ["urgency_level", "collected_amount"])
+            _drop_sqlite_columns_if_exist(
+                conn, "help_requests", ["urgency_level", "collected_amount", "payment_inn", "payment_ogrn"]
+            )
             hr_cols = _table_columns(conn, "help_requests")
             if "deadline_note" not in hr_cols:
                 conn.execute(text("ALTER TABLE help_requests ADD COLUMN deadline_note VARCHAR(255)"))
@@ -606,6 +646,10 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         "ALTER TABLE help_requests ADD COLUMN urgency_level VARCHAR(32) NOT NULL DEFAULT 'normal'"
                     )
                 )
+            hr_cols3 = _table_columns(conn, "help_requests")
+            for col, ddl in (("payment_bank_account", "VARCHAR(64)"),):
+                if col not in hr_cols3:
+                    conn.execute(text(f"ALTER TABLE help_requests ADD COLUMN {col} {ddl}"))
 
         if _has_table(conn, "animals"):
             ac = _table_columns(conn, "animals")
@@ -818,6 +862,29 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                         animal_id INTEGER NOT NULL,
                         status VARCHAR(32) NOT NULL,
                         message TEXT,
+                        applicant_name VARCHAR(120),
+                        applicant_age INTEGER,
+                        applicant_phone VARCHAR(32),
+                        applicant_email VARCHAR(320),
+                        housing_type VARCHAR(20),
+                        housing_ownership VARCHAR(20),
+                        residents_consent BOOLEAN,
+                        has_children BOOLEAN,
+                        has_allergy BOOLEAN,
+                        had_pets_before BOOLEAN,
+                        has_pets_now BOOLEAN,
+                        pet_experience TEXT,
+                        why_now TEXT,
+                        who_looking_for TEXT,
+                        ready_for_vet_costs BOOLEAN,
+                        feeding_plan VARCHAR(500),
+                        ready_for_vaccination BOOLEAN,
+                        time_to_devote VARCHAR(500),
+                        vacation_care VARCHAR(500),
+                        return_plan TEXT,
+                        ready_to_sign_contract BOOLEAN,
+                        ready_to_show_conditions BOOLEAN,
+                        ready_to_keep_in_touch BOOLEAN,
                         created_at DATETIME,
                         updated_at DATETIME,
                         PRIMARY KEY (id),
@@ -846,6 +913,35 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     "ON animal_adoption_applications (status)"
                 )
             )
+        else:
+            aa_cols = _table_columns(conn, "animal_adoption_applications")
+            for col, ddl in (
+                ("applicant_name", "VARCHAR(120)"),
+                ("applicant_age", "INTEGER"),
+                ("applicant_phone", "VARCHAR(32)"),
+                ("applicant_email", "VARCHAR(320)"),
+                ("housing_type", "VARCHAR(20)"),
+                ("housing_ownership", "VARCHAR(20)"),
+                ("residents_consent", "BOOLEAN"),
+                ("has_children", "BOOLEAN"),
+                ("has_allergy", "BOOLEAN"),
+                ("had_pets_before", "BOOLEAN"),
+                ("has_pets_now", "BOOLEAN"),
+                ("pet_experience", "TEXT"),
+                ("why_now", "TEXT"),
+                ("who_looking_for", "TEXT"),
+                ("ready_for_vet_costs", "BOOLEAN"),
+                ("feeding_plan", "VARCHAR(500)"),
+                ("ready_for_vaccination", "BOOLEAN"),
+                ("time_to_devote", "VARCHAR(500)"),
+                ("vacation_care", "VARCHAR(500)"),
+                ("return_plan", "TEXT"),
+                ("ready_to_sign_contract", "BOOLEAN"),
+                ("ready_to_show_conditions", "BOOLEAN"),
+                ("ready_to_keep_in_touch", "BOOLEAN"),
+            ):
+                if col not in aa_cols:
+                    conn.execute(text(f"ALTER TABLE animal_adoption_applications ADD COLUMN {col} {ddl}"))
 
         if _has_table(conn, "help_requests") and not _has_table(conn, "volunteer_help_responses"):
             conn.execute(
@@ -907,5 +1003,48 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_vol_help_reports_response "
                     "ON volunteer_help_response_reports (volunteer_help_response_id)"
+                )
+            )
+
+        if _has_table(conn, "help_requests"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_help_requests_public_urgent "
+                    "ON help_requests (is_published, is_archived, is_urgent, deadline_at)"
+                )
+            )
+        if _has_table(conn, "knowledge_articles"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_knowledge_articles_public_list "
+                    "ON knowledge_articles (is_published, is_archived, created_at)"
+                )
+            )
+        if _has_table(conn, "events"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_events_public_list "
+                    "ON events (is_published, is_archived, starts_at)"
+                )
+            )
+        if _has_table(conn, "organizations"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_organizations_geo "
+                    "ON organizations (latitude, longitude)"
+                )
+            )
+        if _has_table(conn, "volunteer_profiles"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_volunteer_profiles_geo "
+                    "ON volunteer_profiles (latitude, longitude)"
+                )
+            )
+        if _has_table(conn, "events"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_events_geo "
+                    "ON events (latitude, longitude)"
                 )
             )

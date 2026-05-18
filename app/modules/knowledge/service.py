@@ -3,6 +3,7 @@ import re
 
 from fastapi import HTTPException, status
 
+from app.core.config import settings
 from app.models.knowledge import KnowledgeArticle
 from app.models.user import User, UserRole
 from app.modules.knowledge.repository import KnowledgeRepository
@@ -26,6 +27,12 @@ _WORD_RE = re.compile(r"\b[\w'-]+\b", flags=re.UNICODE)
 class KnowledgeService:
     def __init__(self, repo: KnowledgeRepository):
         self.repo = repo
+
+    @staticmethod
+    def _cover_url(path: str | None) -> str | None:
+        if not path or not str(path).strip():
+            return None
+        return f"{settings.media_url_prefix}/{str(path).strip().lstrip('/')}"
 
     @staticmethod
     def _ensure_writer(user: User) -> None:
@@ -77,10 +84,14 @@ class KnowledgeService:
         row = self.repo.get_article(article_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+        return self._to_detail(row)
+
+    def _to_detail(self, row: KnowledgeArticle) -> KnowledgeDetail:
         return KnowledgeDetail(
             id=row.id,
             title=row.title,
             summary=row.summary,
+            cover_url=self._cover_url(row.cover_path),
             content=row.content,
             category=row.category,
             category_label=_CATEGORY_LABELS.get(row.category),
@@ -107,7 +118,6 @@ class KnowledgeService:
         )
         self.repo.db.add(art)
         self.repo.db.commit()
-        self.repo.db.refresh(art)
         return self.get_detail(art.id)
 
     def update_article(self, article_id: int, user: User, payload: KnowledgeUpdateRequest) -> KnowledgeDetail:
@@ -132,20 +142,7 @@ class KnowledgeService:
             art.read_minutes = self._estimate_read_minutes(payload.content)
 
         self.repo.db.commit()
-        self.repo.db.refresh(art)
-        return KnowledgeDetail(
-            id=art.id,
-            title=art.title,
-            summary=art.summary,
-            content=art.content,
-            category=art.category,
-            category_label=_CATEGORY_LABELS.get(art.category),
-            read_minutes=art.read_minutes,
-            is_context_tip=bool(art.is_context_tip),
-            owner_role=art.owner_role,
-            created_at=art.created_at,
-            updated_at=art.updated_at,
-        )
+        return self.get_detail(art.id)
 
     def delete_article(self, article_id: int, user: User) -> None:
         self._ensure_writer(user)
@@ -164,17 +161,4 @@ class KnowledgeService:
         self._ensure_can_edit(art, user)
         art.is_archived = True
         self.repo.db.commit()
-        self.repo.db.refresh(art)
-        return KnowledgeDetail(
-            id=art.id,
-            title=art.title,
-            summary=art.summary,
-            content=art.content,
-            category=art.category,
-            category_label=_CATEGORY_LABELS.get(art.category),
-            read_minutes=art.read_minutes,
-            is_context_tip=bool(art.is_context_tip),
-            owner_role=art.owner_role,
-            created_at=art.created_at,
-            updated_at=art.updated_at,
-        )
+        return self.get_detail(art.id)

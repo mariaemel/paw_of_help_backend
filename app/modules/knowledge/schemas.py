@@ -23,6 +23,7 @@ class KnowledgeListItem(BaseModel):
     id: int
     title: str
     summary: str | None = None
+    cover_url: str | None = None
     category: str
     category_label: str | None = None
     read_minutes: int
@@ -36,6 +37,7 @@ class KnowledgeDetail(BaseModel):
     id: int
     title: str
     summary: str | None = None
+    cover_url: str | None = None
     content: str
     category: str
     category_label: str | None = None
