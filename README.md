@@ -15,7 +15,7 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload
 ```
 
-## Установка и запуск (bash / Git Bash)h
+## Установка и запуск (bash / Git Bash)
 
 ```bash
 cd paw_of_help
