@@ -42,6 +42,8 @@ class VolunteerListItem(BaseModel):
     is_available: bool = True
     competency_tags: list[str] = Field(default_factory=list)
     animal_types: list[str] = Field(default_factory=list)
+    help_format: str | None = None
+    help_format_label: str | None = None
     travel_radius_km: int | None = None
     availability: str | None = None
 

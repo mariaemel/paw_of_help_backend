@@ -140,6 +140,10 @@ class UrgentService:
         total, rows = self.repo.list_public_urgent(filters)
         return UrgentListResponse(total=total, items=[self._to_item(r) for r in rows])
 
+    def list_volunteer_tasks(self, filters: UrgentFilterParams) -> UrgentListResponse:
+        total, rows = self.repo.list_public_volunteer_tasks(filters)
+        return UrgentListResponse(total=total, items=[self._to_item(r) for r in rows])
+
     def get_catalogs(self) -> UrgentCatalogsResponse:
         cities, species = self.repo.list_catalogs()
         return UrgentCatalogsResponse(

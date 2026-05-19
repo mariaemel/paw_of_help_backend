@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.adoption_application import AnimalAdoptionApplication
 from app.models.animal import Animal
+from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.help_request import HelpRequest
 from app.models.org_chat import OrgChatDialog, OrgChatMessage
 from app.models.event import Event
@@ -208,7 +209,10 @@ class AccountRepository:
         )
 
     def count_org_animals(self, organization_id: int, q: str | None) -> int:
-        query = self.db.query(Animal).filter(Animal.organization_id == organization_id)
+        query = self.db.query(Animal).filter(
+            Animal.organization_id == organization_id,
+            Animal.status != "archived",
+        )
         if q and q.strip():
             like = f"%{q.strip().lower()}%"
             query = query.filter(func.lower(Animal.name).like(like))
@@ -217,8 +221,14 @@ class AccountRepository:
     def list_org_animals(self, organization_id: int, q: str | None, limit: int, offset: int) -> list[Animal]:
         query = (
             self.db.query(Animal)
-            .options(joinedload(Animal.photos))
-            .filter(Animal.organization_id == organization_id)
+            .options(
+                joinedload(Animal.photos),
+                selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
+            )
+            .filter(
+                Animal.organization_id == organization_id,
+                Animal.status != "archived",
+            )
         )
         if q and q.strip():
             like = f"%{q.strip().lower()}%"
@@ -233,10 +243,38 @@ class AccountRepository:
     def get_org_animal(self, organization_id: int, animal_id: int) -> Animal | None:
         return (
             self.db.query(Animal)
-            .options(joinedload(Animal.photos))
+            .options(
+                joinedload(Animal.photos),
+                selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
+            )
             .filter(Animal.organization_id == organization_id, Animal.id == animal_id)
             .first()
         )
+
+    def set_animal_catalog_slugs(
+        self, animal_id: int, health_care_slugs: list[str], character_slugs: list[str]
+    ) -> None:
+        key_to_id = {(r.kind, r.slug): int(r.id) for r in self.db.query(AnimalCatalogItem).all()}
+
+        def replace_kind(kind: str, slugs: list[str]) -> None:
+            ids_for_kind = [cid for (k, _), cid in key_to_id.items() if k == kind]
+            if ids_for_kind:
+                self.db.query(AnimalCatalogAssignment).filter(
+                    AnimalCatalogAssignment.animal_id == animal_id,
+                    AnimalCatalogAssignment.catalog_item_id.in_(ids_for_kind),
+                ).delete(synchronize_session=False)
+            seen: set[str] = set()
+            for raw in slugs:
+                slug = (raw or "").strip().lower()
+                if not slug or slug in seen:
+                    continue
+                seen.add(slug)
+                cid = key_to_id.get((kind, slug))
+                if cid is not None:
+                    self.db.add(AnimalCatalogAssignment(animal_id=animal_id, catalog_item_id=cid))
+
+        replace_kind("health_care", health_care_slugs)
+        replace_kind("character", character_slugs)
 
     def count_org_help_requests(self, organization_id: int, q: str | None, type_group: str | None) -> int:
         query = self.db.query(HelpRequest).filter(HelpRequest.organization_id == organization_id)
@@ -465,7 +503,7 @@ class AccountRepository:
         )
 
     def mark_dialog_messages_read_by_org(self, dialog_id: int) -> None:
-        now_expr = func.datetime("now")
+        now_expr = func.now()
         self.db.query(OrgChatMessage).filter(
             OrgChatMessage.dialog_id == dialog_id,
             OrgChatMessage.read_by_org_at.is_(None),
@@ -476,7 +514,7 @@ class AccountRepository:
         )
 
     def mark_dialog_messages_read_by_volunteer(self, dialog_id: int) -> None:
-        now_expr = func.datetime("now")
+        now_expr = func.now()
         self.db.query(OrgChatMessage).filter(
             OrgChatMessage.dialog_id == dialog_id,
             OrgChatMessage.read_by_volunteer_at.is_(None),
@@ -507,13 +545,13 @@ class AccountRepository:
         role = self.db.query(User.role).filter(User.id == user_id).scalar()
         if role is None:
             return False
-        return str(role) == UserRole.VOLUNTEER.value
+        return role == UserRole.VOLUNTEER or role == UserRole.VOLUNTEER.value
 
     def participant_is_user(self, user_id: int) -> bool:
         role = self.db.query(User.role).filter(User.id == user_id).scalar()
         if role is None:
             return False
-        return str(role) == UserRole.USER.value
+        return role == UserRole.USER or role == UserRole.USER.value
 
     def get_user_by_id_with_profiles(self, user_id: int) -> User | None:
         return (
@@ -627,7 +665,7 @@ class AccountRepository:
         return row if row else None
 
     def mark_dialog_messages_read_by_user(self, dialog_id: int) -> None:
-        now_expr = func.datetime("now")
+        now_expr = func.now()
         self.db.query(OrgChatMessage).filter(
             OrgChatMessage.dialog_id == dialog_id,
             OrgChatMessage.read_by_user_at.is_(None),

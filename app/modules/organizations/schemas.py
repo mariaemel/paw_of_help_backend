@@ -2,6 +2,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.help.schemas import HelpAnimalCard
+
 
 class OrganizationListItem(BaseModel):
     id: int
@@ -92,6 +94,7 @@ class OrgPublicWardCard(BaseModel):
     id: int
     name: str
     species: str
+    breed: str | None = None
     age_months: int
     status: str
     status_label: str
@@ -148,6 +151,7 @@ class OrganizationPublicPage(BaseModel):
     about: OrgPublicAbout
     help_sections: list[OrgPublicHelpSection]
     urgent_help: list[OrgPublicUrgentNeed]
+    help_animals: list[HelpAnimalCard] = Field(default_factory=list)
     events: list[OrgPublicEvent]
     reports: list[OrgPublicReport]
     articles: list[OrgPublicArticle]

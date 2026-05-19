@@ -501,6 +501,19 @@ def get_org_incoming_volunteer_response(
 
 
 @router.post(
+    "/organization/incoming/volunteer-responses/{response_id}/dialog",
+    response_model=s.OrgCommsDialogItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def open_org_dialog_for_volunteer_response(
+    response_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.open_org_dialog_for_volunteer_response(user, response_id)
+
+
+@router.post(
     "/organization/incoming/volunteer-responses/{response_id}/accept",
     response_model=s.OrgIncomingVolunteerResponseItem,
 )
@@ -630,6 +643,16 @@ def update_org_home_story(
     service: AccountService = Depends(get_account_service),
 ):
     return service.update_org_home_story(user, story_id, payload)
+
+
+@router.post("/organization/home-stories/{story_id}/photo", response_model=s.OrgHomeStoryItem)
+def upload_org_home_story_photo(
+    story_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.upload_org_home_story_photo(user, story_id, file)
 
 
 @router.delete("/organization/home-stories/{story_id}", status_code=status.HTTP_204_NO_CONTENT)

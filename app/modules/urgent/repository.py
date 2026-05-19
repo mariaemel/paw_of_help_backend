@@ -92,3 +92,33 @@ class UrgentRepository:
             .all()
         )
         return total, rows
+
+    def _list_public_volunteer_tasks_query(self, filters: UrgentFilterParams):
+        q = self.db.query(HelpRequest).filter(
+            HelpRequest.is_archived.is_(False),
+            HelpRequest.is_published.is_(True),
+            HelpRequest.volunteer_needed.is_(True),
+            HelpRequest.status.in_(("open", "in_progress")),
+        )
+        q = apply_text_search(q, filters.q, HelpRequest.title, HelpRequest.description)
+        q = apply_city_filter(q, HelpRequest.city, filters.city)
+        if filters.help_types:
+            q = q.filter(HelpRequest.help_type.in_(filters.help_types))
+        if filters.animal_species and filters.animal_species != "all":
+            q = q.join(Animal, Animal.id == HelpRequest.animal_id).filter(Animal.species == filters.animal_species)
+        return q
+
+    def list_public_volunteer_tasks(self, filters: UrgentFilterParams) -> tuple[int, list[HelpRequest]]:
+        q = self._list_public_volunteer_tasks_query(filters)
+        total = q.order_by(None).count()
+        q = q.order_by(desc(HelpRequest.is_urgent), desc(HelpRequest.created_at), desc(HelpRequest.id))
+        rows = (
+            q.options(
+                joinedload(HelpRequest.organization),
+                joinedload(HelpRequest.animal).joinedload(Animal.photos),
+            )
+            .offset(filters.offset)
+            .limit(filters.limit)
+            .all()
+        )
+        return total, rows

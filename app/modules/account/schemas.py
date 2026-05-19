@@ -436,9 +436,21 @@ class OrgOwnedAnimalItem(BaseModel):
     id: int
     name: str
     species: str
+    breed: str | None = None
+    sex: str = "unknown"
     age_months: int
     status: str
     is_urgent: bool = False
+    full_description: str | None = None
+    location_city: str | None = None
+    health_features: str | None = None
+    treatment_required: str | None = None
+    health_care_other: str | None = None
+    character_other: str | None = None
+    health_care_slugs: list[str] = Field(default_factory=list)
+    character_slugs: list[str] = Field(default_factory=list)
+    health_checklist: list[str] = Field(default_factory=list)
+    character_tags: list[str] = Field(default_factory=list)
     primary_photo_url: str | None = None
     created_at: datetime
 
@@ -457,16 +469,30 @@ class OrgOwnedAnimalCreate(BaseModel):
     status: str = Field(default="looking_for_home", max_length=40)
     full_description: str | None = Field(default=None, max_length=8000)
     location_city: str | None = Field(default=None, max_length=120)
+    health_features: str | None = Field(default=None, max_length=8000)
+    treatment_required: str | None = Field(default=None, max_length=8000)
+    health_care_other: str | None = Field(default=None, max_length=500)
+    character_other: str | None = Field(default=None, max_length=500)
+    health_care_slugs: list[str] = Field(default_factory=list)
+    character_slugs: list[str] = Field(default_factory=list)
     is_urgent: bool = False
 
 
 class OrgOwnedAnimalUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    species: str | None = Field(default=None, max_length=20)
+    sex: str | None = Field(default=None, max_length=20)
     status: str | None = Field(default=None, max_length=40)
     age_months: int | None = Field(default=None, ge=0, le=600)
     breed: str | None = Field(default=None, max_length=120)
     full_description: str | None = Field(default=None, max_length=8000)
     location_city: str | None = Field(default=None, max_length=120)
+    health_features: str | None = Field(default=None, max_length=8000)
+    treatment_required: str | None = Field(default=None, max_length=8000)
+    health_care_other: str | None = Field(default=None, max_length=500)
+    character_other: str | None = Field(default=None, max_length=500)
+    health_care_slugs: list[str] | None = None
+    character_slugs: list[str] | None = None
     is_urgent: bool | None = None
 
 

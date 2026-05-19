@@ -1778,6 +1778,8 @@ def enrich_demo_volunteers(db: Session) -> None:
             p2.latitude = 59.9343
         if p2.longitude is None:
             p2.longitude = 30.3351
+        if not p2.help_format:
+            p2.help_format = "one_time"
 
 
 if __name__ == "__main__":

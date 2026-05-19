@@ -121,6 +121,26 @@ def _sort_tab_all(items: list[HelpAnimalCard]) -> None:
     items.sort(key=key)
 
 
+def _build_help_animal_card(animal) -> HelpAnimalCard | None:
+    adopt_ready = animal.status == AnimalStatus.LOOKING_FOR_HOME.value
+    monetaries = _all_bucket_lines(animal)
+    if not _animal_on_page(adopt_ready, monetaries):
+        return None
+    return HelpAnimalCard(
+        animal_id=int(animal.id),
+        name=animal.name,
+        species_tag=species_label_ru(animal.species, animal.sex),
+        age_tag=_age_tag_ru(int(animal.age_months or 0)),
+        status_chip=_status_chip_ru(animal.status),
+        organization_name=(animal.organization.name if animal.organization else None),
+        location_city=getattr(animal, "location_city", None),
+        is_urgent=bool(getattr(animal, "is_urgent", False)),
+        monetary=list(monetaries),
+        adopt_ready=adopt_ready,
+        primary_photo_url=_primary_photo(animal),
+    )
+
+
 class HelpService:
     def __init__(self, repo: HelpRepository):
         self.repo = repo
@@ -140,12 +160,13 @@ class HelpService:
 
         items_out: list[HelpAnimalCard] = []
         for animal in self.repo.list_candidate_animals():
-            adopt_ready = animal.status == AnimalStatus.LOOKING_FOR_HOME.value
-            monetaries = _all_bucket_lines(animal)
-            buckets_all = _buckets_present(adopt_ready, monetaries)
-
-            if not _animal_on_page(adopt_ready, monetaries):
+            card = _build_help_animal_card(animal)
+            if card is None:
                 continue
+
+            adopt_ready = card.adopt_ready
+            monetaries = list(card.monetary)
+            buckets_all = _buckets_present(adopt_ready, monetaries)
 
             if tl == TAB_ADOPT:
                 if not adopt_ready:
@@ -157,22 +178,18 @@ class HelpService:
                 if not _scoped_monetary(monetaries, bucket_filter):
                     continue
 
-            card = HelpAnimalCard(
-                animal_id=int(animal.id),
-                name=animal.name,
-                species_tag=species_label_ru(animal.species, animal.sex),
-                age_tag=_age_tag_ru(int(animal.age_months or 0)),
-                status_chip=_status_chip_ru(animal.status),
-                organization_name=(animal.organization.name if animal.organization else None),
-                location_city=getattr(animal, "location_city", None),
-                is_urgent=bool(getattr(animal, "is_urgent", False)),
-                monetary=list(monetaries),
-                adopt_ready=adopt_ready,
-                primary_photo_url=_primary_photo(animal),
-            )
             items_out.append(card)
 
         if tl == TAB_ALL:
             _sort_tab_all(items_out)
 
         return HelpListResponse(tab=tl, total=len(items_out), items=items_out)
+
+    def list_cards_for_organization(self, organization_id: int) -> list[HelpAnimalCard]:
+        items_out: list[HelpAnimalCard] = []
+        for animal in self.repo.list_candidate_animals(organization_id=organization_id):
+            card = _build_help_animal_card(animal)
+            if card is not None:
+                items_out.append(card)
+        _sort_tab_all(items_out)
+        return items_out

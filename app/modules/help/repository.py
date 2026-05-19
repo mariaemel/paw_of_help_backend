@@ -9,8 +9,8 @@ class HelpRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def list_candidate_animals(self) -> list[Animal]:
-        return (
+    def list_candidate_animals(self, organization_id: int | None = None) -> list[Animal]:
+        q = (
             self.db.query(Animal)
             .options(
                 joinedload(Animal.organization),
@@ -18,6 +18,7 @@ class HelpRepository:
                 selectinload(Animal.help_requests),
             )
             .filter(Animal.status != AnimalStatus.ARCHIVED.value)
-            .order_by(Animal.id.asc())
-            .all()
         )
+        if organization_id is not None:
+            q = q.filter(Animal.organization_id == organization_id)
+        return q.order_by(Animal.id.asc()).all()

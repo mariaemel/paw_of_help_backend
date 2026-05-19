@@ -54,6 +54,8 @@ class Animal(Base):
 
     health_features: Mapped[str | None] = mapped_column(Text, nullable=True)
     treatment_required: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_care_other: Mapped[str | None] = mapped_column(Text, nullable=True)
+    character_other: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     location_city: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

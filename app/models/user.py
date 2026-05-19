@@ -17,6 +17,9 @@ class UserRole(str, Enum):
     VOLUNTEER = "volunteer"
     ORGANIZATION = "organization"
 
+    def __str__(self) -> str:
+        return str(self.value)
+
 
 class User(Base):
     __tablename__ = "users"

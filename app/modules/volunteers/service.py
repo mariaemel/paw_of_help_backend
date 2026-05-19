@@ -171,6 +171,8 @@ class VolunteerService:
         _, comp_labels = self._competency_slugs_labels_from_profile(profile)
         animal_ids, animal_labels = self._animal_types(profile.animal_types_json)
         exp_id = profile.experience_level
+        hf = profile.help_format
+        hf_label = HELP_FORMAT_LABELS.get(hf) if hf else None
         return VolunteerListItem(
             user_id=user.id,
             full_name=user.full_name,
@@ -182,6 +184,8 @@ class VolunteerService:
             is_available=bool(profile.is_available),
             competency_tags=self._competency_tag_pills_from_profile(profile) or comp_labels[:5],
             animal_types=animal_labels or (animal_ids if animal_ids else []),
+            help_format=hf,
+            help_format_label=hf_label,
             travel_radius_km=profile.travel_radius_km,
             availability=profile.availability,
         )

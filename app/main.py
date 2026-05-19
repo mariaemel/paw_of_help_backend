@@ -36,11 +36,21 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import logging
+
+    logger = logging.getLogger("app.startup")
+    logger.info("Applying database migrations…")
     init_db(engine)
+    logger.info("Database ready.")
     if settings.seed_demo_data:
         db = SessionLocal()
         try:
+            logger.info("Checking demo seed data…")
             seed_demo_data_if_empty(db)
+            logger.info("Demo seed check finished.")
+        except Exception:
+            logger.exception("Demo seed failed; API will start without re-seeding.")
+            db.rollback()
         finally:
             db.close()
 

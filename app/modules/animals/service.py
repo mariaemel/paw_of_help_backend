@@ -107,7 +107,13 @@ class AnimalService:
 
         full_desc = getattr(animal, "full_description", None)
         checklist = labels_for_catalog_kind(animal, "health_care")
+        hc_other = (getattr(animal, "health_care_other", None) or "").strip()
+        if hc_other:
+            checklist = [*checklist, hc_other[0].upper() + hc_other[1:] if len(hc_other) > 1 else hc_other.upper()]
         char_tags = labels_for_catalog_kind(animal, "character")
+        ch_other = (getattr(animal, "character_other", None) or "").strip()
+        if ch_other:
+            char_tags = [*char_tags, ch_other[0].upper() + ch_other[1:] if len(ch_other) > 1 else ch_other.upper()]
 
         return AnimalDetail(
             id=animal.id,

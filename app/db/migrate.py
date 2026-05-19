@@ -660,6 +660,8 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                 ("full_description", "TEXT"),
                 ("health_features", "TEXT"),
                 ("treatment_required", "TEXT"),
+                ("health_care_other", "TEXT"),
+                ("character_other", "TEXT"),
                 ("urgent_needs_text", "TEXT"),
             ]
             for col, ddl in alters:

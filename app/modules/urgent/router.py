@@ -53,6 +53,31 @@ def urgent_catalogs(service: UrgentService = Depends(get_urgent_service)):
     return service.get_catalogs()
 
 
+@router.get("/volunteer-tasks", response_model=UrgentListResponse)
+def list_volunteer_tasks(
+    q: str | None = Query(default=None),
+    city: str | None = Query(default=None),
+    animal_species: str | None = Query(default=None, description="cat | dog | all"),
+    help_types: str | None = Query(default=None, description="Через запятую: financial,auto,..."),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: UrgentService = Depends(get_urgent_service),
+):
+    help_list: list[str] = []
+    if help_types:
+        help_list = [x.strip() for x in help_types.split(",") if x.strip()]
+    filters = UrgentFilterParams(
+        q=q,
+        city=city,
+        animal_species=animal_species,
+        help_types=help_list,
+        limit=limit,
+        offset=offset,
+        sort_by="-created_at",
+    )
+    return service.list_volunteer_tasks(filters)
+
+
 @router.get("/{request_id}", response_model=UrgentRequestDetail)
 def urgent_detail(request_id: int, service: UrgentService = Depends(get_urgent_service)):
     return service.get_detail(request_id)

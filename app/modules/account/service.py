@@ -26,6 +26,7 @@ from app.modules.account.storage import (
 from app.modules.animals.jsonutil import parse_json_list
 from app.modules.animals.tags import species_label_ru
 from app.modules.organizations.service import OrganizationService
+from app.modules.animals.catalog_marks import labels_for_catalog_kind
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.urgent.schemas import HELP_TYPE_OPTIONS
 from app.modules.account.adoption_form import (
@@ -993,14 +994,57 @@ class AccountService:
         org = self._organization_for_user(user)
         return OrganizationService(OrganizationRepository(self.repo.db)).get_public_page(org.id)
 
+    @staticmethod
+    def _capitalize_catalog_label(label: str) -> str:
+        s = (label or "").strip()
+        if not s:
+            return s
+        return s[0].upper() + s[1:]
+
+    @classmethod
+    def _catalog_labels(cls, animal: Animal, kind: str) -> list[str]:
+        labels = [cls._capitalize_catalog_label(lb) for lb in labels_for_catalog_kind(animal, kind)]
+        if kind == "health_care":
+            other = (getattr(animal, "health_care_other", None) or "").strip()
+            if other:
+                labels.append(cls._capitalize_catalog_label(other))
+        elif kind == "character":
+            other = (getattr(animal, "character_other", None) or "").strip()
+            if other:
+                labels.append(cls._capitalize_catalog_label(other))
+        return labels
+
+    @staticmethod
+    def _catalog_slugs(animal: Animal, kind: str) -> list[str]:
+        rows: list[tuple[int, str]] = []
+        for asg in animal.catalog_assignments or []:
+            ci = asg.catalog_item
+            if ci is None or ci.kind != kind:
+                continue
+            rows.append((int(ci.sort_order or 0), ci.slug))
+        rows.sort(key=lambda x: (x[0], x[1]))
+        return [slug for _, slug in rows]
+
     def _org_owned_animal_item(self, a: Animal) -> s.OrgOwnedAnimalItem:
         return s.OrgOwnedAnimalItem(
             id=a.id,
             name=a.name,
-            species=a.species,
+            species=species_label_ru(a.species, a.sex),
+            breed=a.breed,
+            sex=a.sex,
             age_months=int(a.age_months or 0),
             status=a.status,
             is_urgent=bool(a.is_urgent),
+            full_description=a.full_description,
+            location_city=a.location_city,
+            health_features=a.health_features,
+            treatment_required=a.treatment_required,
+            health_care_other=getattr(a, "health_care_other", None),
+            character_other=getattr(a, "character_other", None),
+            health_care_slugs=self._catalog_slugs(a, "health_care"),
+            character_slugs=self._catalog_slugs(a, "character"),
+            health_checklist=self._catalog_labels(a, "health_care"),
+            character_tags=self._catalog_labels(a, "character"),
             primary_photo_url=_primary_photo_url(a),
             created_at=a.created_at,
         )
@@ -1023,11 +1067,21 @@ class AccountService:
             status=payload.status,
             full_description=payload.full_description,
             location_city=payload.location_city or org.city,
+            health_features=payload.health_features,
+            treatment_required=payload.treatment_required,
+            health_care_other=(payload.health_care_other or "").strip() or None,
+            character_other=(payload.character_other or "").strip() or None,
             is_urgent=payload.is_urgent,
         )
         self.repo.db.add(a)
+        self.repo.db.flush()
+        self.repo.set_animal_catalog_slugs(
+            int(a.id), list(payload.health_care_slugs), list(payload.character_slugs)
+        )
         self.repo.db.commit()
-        self.repo.db.refresh(a)
+        a = self.repo.get_org_animal(org.id, int(a.id))
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Питомец не найден")
         return self._org_owned_animal_item(a)
 
     def update_org_animal(self, user: User, animal_id: int, payload: s.OrgOwnedAnimalUpdate) -> s.OrgOwnedAnimalItem:
@@ -1038,20 +1092,42 @@ class AccountService:
         changed = False
         for field in (
             "name",
+            "species",
+            "sex",
             "status",
             "age_months",
             "breed",
             "full_description",
             "location_city",
+            "health_features",
+            "treatment_required",
+            "health_care_other",
+            "character_other",
             "is_urgent",
         ):
             if getattr(payload, field) is not None:
                 setattr(a, field, getattr(payload, field))
                 changed = True
+        catalog_changed = payload.health_care_slugs is not None or payload.character_slugs is not None
+        if catalog_changed:
+            hc = (
+                list(payload.health_care_slugs)
+                if payload.health_care_slugs is not None
+                else self._catalog_slugs(a, "health_care")
+            )
+            ch = (
+                list(payload.character_slugs)
+                if payload.character_slugs is not None
+                else self._catalog_slugs(a, "character")
+            )
+            self.repo.set_animal_catalog_slugs(int(a.id), hc, ch)
+            changed = True
         if not changed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
         self.repo.db.commit()
-        self.repo.db.refresh(a)
+        a = self.repo.get_org_animal(org.id, animal_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
         return self._org_owned_animal_item(a)
 
     def archive_org_animal(self, user: User, animal_id: int) -> s.OrgOwnedAnimalItem:
@@ -1432,8 +1508,7 @@ class AccountService:
         participant = self.repo.get_user_by_id_with_profiles(payload.participant_user_id)
         if participant is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
-        role = str(participant.role)
-        if role not in (UserRole.USER.value, UserRole.VOLUNTEER.value):
+        if participant.role not in (UserRole.USER, UserRole.VOLUNTEER):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Диалог можно открыть только с пользователем или волонтёром",
@@ -1454,7 +1529,7 @@ class AccountService:
             ctx_title = payload.context_title
             ctx_type = payload.context_type
             ctx_id = payload.context_entity_id
-        elif role == UserRole.VOLUNTEER.value:
+        elif participant.role == UserRole.VOLUNTEER.value:
             ctx_title = "Переписка с волонтёром"
             ctx_type = "volunteer_direct"
             ctx_id = None
@@ -1494,6 +1569,22 @@ class AccountService:
                 context_title=f"Анкета на {animal_name}",
             ),
         )
+
+    def open_org_dialog_for_volunteer_response(self, user: User, response_id: int) -> s.OrgCommsDialogItem:
+        org = self._organization_for_user(user)
+        response = self.repo.get_org_volunteer_response(org.id, response_id)
+        if response is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        self._ensure_volunteer_response_dialog(org, response)
+        self.repo.db.commit()
+        dialog = self.repo.find_org_dialog_by_org_and_participant(org.id, response.volunteer_user_id)
+        if dialog is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Не удалось создать диалог",
+            )
+        self.repo.db.refresh(dialog)
+        return self._dialog_item(dialog)
 
     def _volunteer_dialog_item(self, dialog: OrgChatDialog, org) -> s.VolCommsDialogItem:
         return s.VolCommsDialogItem(
@@ -1834,6 +1925,24 @@ class AccountService:
                 changed = True
         if not changed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_home_story_item(row)
+
+    def upload_org_home_story_photo(
+        self, user: User, story_id: int, file: UploadFile
+    ) -> s.OrgHomeStoryItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_home_story(org.id, story_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="История не найдена")
+        try:
+            path = save_org_asset(
+                settings.media_dir, org.id, "home_stories", file, max_size_bytes=5 * 1024 * 1024
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        row.photo_path = path
         self.repo.db.commit()
         self.repo.db.refresh(row)
         return self._org_home_story_item(row)

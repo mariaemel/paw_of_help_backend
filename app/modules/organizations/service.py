@@ -7,6 +7,8 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 from app.modules.animals.tags import species_label_ru
 from app.modules.organizations.public_catalog import DEFAULT_HELP_SECTIONS, WARD_STATUS_PUBLIC_LABELS
+from app.modules.help.repository import HelpRepository
+from app.modules.help.service import HelpService
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.organizations.schemas import (
     OrganizationCatalogsResponse,
@@ -239,6 +241,7 @@ class OrganizationService:
                     id=a.id,
                     name=a.name,
                     species=species_label_ru(getattr(a, "species", "cat"), a.sex),
+                    breed=(getattr(a, "breed", None) or "").strip() or None,
                     age_months=int(getattr(a, "age_months", 0) or 0),
                     status=st,
                     status_label=_ward_status_label(st),
@@ -327,12 +330,15 @@ class OrganizationService:
             for s in self.repo.list_org_home_stories(org.id)
         ]
 
+        help_animals = HelpService(HelpRepository(self.repo.db)).list_cards_for_organization(org.id)
+
         return OrganizationPublicPage(
             hero=hero,
             wards=wards,
             about=about,
             help_sections=_help_sections(org),
             urgent_help=urgent_help,
+            help_animals=help_animals,
             events=events_out,
             reports=reports_out,
             articles=articles_out,
