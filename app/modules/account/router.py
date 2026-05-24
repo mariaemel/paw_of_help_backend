@@ -390,12 +390,16 @@ def upload_org_gallery_image(
 @router.get("/organization/animals", response_model=s.OrgOwnedAnimalListResponse)
 def list_org_animals(
     q: str | None = Query(default=None, description="Поиск по кличке"),
+    tab: Literal["active", "archive"] = Query(
+        default="active",
+        description="active — действующие анкеты; archive — архив",
+    ),
     limit: int = Query(default=24, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(require_organization_role),
     service: AccountService = Depends(get_account_service),
 ):
-    return service.list_org_animals(user, q, limit, offset)
+    return service.list_org_animals(user, q, limit, offset, tab)
 
 
 @router.post("/organization/animals", response_model=s.OrgOwnedAnimalItem, status_code=status.HTTP_201_CREATED)
@@ -536,6 +540,31 @@ def reject_org_incoming_volunteer_response(
     service: AccountService = Depends(get_account_service),
 ):
     return service.reject_org_incoming_volunteer_response(user, response_id, payload)
+
+
+@router.post(
+    "/organization/incoming/volunteer-responses/{response_id}/complete",
+    response_model=s.OrgIncomingVolunteerResponseItem,
+)
+def complete_org_incoming_volunteer_response(
+    response_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.complete_org_incoming_volunteer_response(user, response_id)
+
+
+@router.post(
+    "/organization/incoming/volunteer-responses/{response_id}/report/reject",
+    response_model=s.OrgIncomingVolunteerResponseItem,
+)
+def reject_org_incoming_volunteer_report(
+    response_id: int,
+    payload: s.OrgIncomingRejectRequest,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.reject_org_incoming_volunteer_report(user, response_id, payload)
 
 
 @router.get("/organization/help-requests", response_model=s.OrgOwnedHelpRequestListResponse)

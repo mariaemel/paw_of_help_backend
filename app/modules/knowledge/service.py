@@ -15,6 +15,8 @@ from app.modules.knowledge.schemas import (
     KnowledgeFilterParams,
     KnowledgeListItem,
     KnowledgeListResponse,
+    KnowledgeMineItem,
+    KnowledgeMineListResponse,
     KnowledgeUpdateRequest,
     KnowledgeUpsertRequest,
 )
@@ -43,8 +45,24 @@ class KnowledgeService:
             )
 
     @staticmethod
+    def _user_role_value(user: User) -> str:
+        role = user.role
+        return role.value if isinstance(role, UserRole) else str(role)
+
+    @staticmethod
+    def can_edit_article(article: KnowledgeArticle, user: User | None) -> bool:
+        if user is None:
+            return False
+        if article.author_user_id is None:
+            return False
+        return (
+            int(article.author_user_id) == int(user.id)
+            and str(article.owner_role) == KnowledgeService._user_role_value(user)
+        )
+
+    @staticmethod
     def _ensure_can_edit(article: KnowledgeArticle, user: User) -> None:
-        if article.author_user_id != user.id or article.owner_role != user.role.value:
+        if not KnowledgeService.can_edit_article(article, user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only edit own article")
 
     @staticmethod
@@ -80,13 +98,41 @@ class KnowledgeService:
             ],
         )
 
-    def get_detail(self, article_id: int) -> KnowledgeDetail:
+    def get_detail(self, article_id: int, viewer: User | None = None) -> KnowledgeDetail:
         row = self.repo.get_article(article_id)
         if not row:
+            row = self.repo.get_article_for_owner(article_id)
+        if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-        return self._to_detail(row)
+        if viewer is not None and (not row.is_published or row.is_archived):
+            self._ensure_can_edit(row, viewer)
+        return self._to_detail(row, viewer)
 
-    def _to_detail(self, row: KnowledgeArticle) -> KnowledgeDetail:
+    def list_my_articles(self, user: User, limit: int = 100, offset: int = 0) -> KnowledgeMineListResponse:
+        self._ensure_writer(user)
+        owner_role = self._user_role_value(user)
+        total, rows = self.repo.list_my_articles(int(user.id), owner_role, limit, offset)
+        items = [
+            KnowledgeMineItem(
+                id=a.id,
+                title=a.title,
+                summary=a.summary,
+                cover_url=self._cover_url(a.cover_path),
+                category=a.category,
+                category_label=_CATEGORY_LABELS.get(a.category),
+                read_minutes=a.read_minutes,
+                is_context_tip=bool(a.is_context_tip),
+                created_at=a.created_at,
+                author_user_id=a.author_user_id,
+                is_published=bool(a.is_published),
+                is_archived=bool(a.is_archived),
+                can_edit=True,
+            )
+            for a in rows
+        ]
+        return KnowledgeMineListResponse(total=total, items=items)
+
+    def _to_detail(self, row: KnowledgeArticle, viewer: User | None = None) -> KnowledgeDetail:
         return KnowledgeDetail(
             id=row.id,
             title=row.title,
@@ -98,6 +144,8 @@ class KnowledgeService:
             read_minutes=row.read_minutes,
             is_context_tip=bool(row.is_context_tip),
             owner_role=row.owner_role,
+            author_user_id=row.author_user_id,
+            can_edit=self.can_edit_article(row, viewer),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -106,7 +154,7 @@ class KnowledgeService:
         self._ensure_writer(user)
         art = KnowledgeArticle(
             author_user_id=user.id,
-            owner_role=user.role.value,
+            owner_role=self._user_role_value(user),
             title=payload.title,
             summary=payload.summary,
             content=payload.content,
@@ -118,7 +166,7 @@ class KnowledgeService:
         )
         self.repo.db.add(art)
         self.repo.db.commit()
-        return self.get_detail(art.id)
+        return self.get_detail(art.id, user)
 
     def update_article(self, article_id: int, user: User, payload: KnowledgeUpdateRequest) -> KnowledgeDetail:
         self._ensure_writer(user)
@@ -142,7 +190,7 @@ class KnowledgeService:
             art.read_minutes = self._estimate_read_minutes(payload.content)
 
         self.repo.db.commit()
-        return self.get_detail(art.id)
+        return self.get_detail(art.id, user)
 
     def delete_article(self, article_id: int, user: User) -> None:
         self._ensure_writer(user)
@@ -161,4 +209,4 @@ class KnowledgeService:
         self._ensure_can_edit(art, user)
         art.is_archived = True
         self.repo.db.commit()
-        return self.get_detail(art.id)
+        return self.get_detail(art.id, user)

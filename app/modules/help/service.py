@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.models.animal import AnimalStatus
+from app.modules.animals.age_format import format_age_months_ru
 from app.modules.animals.tags import species_label_ru
 from app.modules.help.bucket import help_bucket_for_request
 from app.modules.help.repository import HelpRepository
@@ -21,21 +22,7 @@ _ALLOWED_TABS = frozenset({TAB_ALL, TAB_ADOPT, TAB_FEED, TAB_HEAL, TAB_OTHER})
 
 
 def _age_tag_ru(months: int) -> str:
-    if months < 12:
-        m = months
-        return f"{m} мес."
-    y = months // 12
-    md = months % 12
-    if y == 1 and md <= 6:
-        return "1 год"
-    last = y % 10
-    ll = y % 100
-    noun = (
-        "год"
-        if last == 1 and ll != 11
-        else ("года" if 2 <= last <= 4 and not (12 <= ll <= 14) else "лет")
-    )
-    return f"{y} {noun}"
+    return format_age_months_ru(months)
 
 
 def _status_chip_ru(animal_status: str) -> str | None:
@@ -131,6 +118,7 @@ def _build_help_animal_card(animal) -> HelpAnimalCard | None:
         name=animal.name,
         species_tag=species_label_ru(animal.species, animal.sex),
         age_tag=_age_tag_ru(int(animal.age_months or 0)),
+        age_months=int(animal.age_months or 0),
         status_chip=_status_chip_ru(animal.status),
         organization_name=(animal.organization.name if animal.organization else None),
         location_city=getattr(animal, "location_city", None),

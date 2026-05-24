@@ -49,3 +49,19 @@ class KnowledgeRepository:
 
     def get_article_for_owner(self, article_id: int) -> KnowledgeArticle | None:
         return self.db.query(KnowledgeArticle).filter(KnowledgeArticle.id == article_id).first()
+
+    def list_my_articles(
+        self, author_user_id: int, owner_role: str, limit: int, offset: int
+    ) -> tuple[int, list[KnowledgeArticle]]:
+        q = self.db.query(KnowledgeArticle).filter(
+            KnowledgeArticle.author_user_id == author_user_id,
+            KnowledgeArticle.owner_role == owner_role,
+        )
+        total = int(q.order_by(None).count() or 0)
+        rows = (
+            q.order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows

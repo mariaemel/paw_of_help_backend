@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.modules.volunteers.constants import COMPETENCY_OPTIONS
 
 HELP_TYPE_OPTIONS: list[dict[str, str]] = [
     {"id": "financial", "label": "Финансовая помощь"},
@@ -11,6 +12,10 @@ HELP_TYPE_OPTIONS: list[dict[str, str]] = [
     {"id": "medical", "label": "Лекарства и кровь"},
     {"id": "food", "label": "Корм"},
 ]
+
+VOLUNTEER_TASK_TYPE_OPTIONS: list[dict[str, str]] = COMPETENCY_OPTIONS
+
+FUNDRAISING_HELP_TYPE_IDS = frozenset({"financial", "food", "medical", "feed"})
 
 
 class CatalogOption(BaseModel):
@@ -77,6 +82,10 @@ class UrgentCatalogsResponse(BaseModel):
     cities: list[str]
     species: list[CatalogOption]
     help_types: list[CatalogOption]
+    volunteer_task_types: list[CatalogOption] = Field(
+        default_factory=list,
+        description="Типы помощи для заявок «нужен волонтёр» (slug компетенций)",
+    )
     statuses: list[CatalogOption]
 
 

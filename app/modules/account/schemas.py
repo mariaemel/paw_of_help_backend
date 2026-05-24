@@ -421,6 +421,12 @@ class OrgIncomingVolunteerResponseItem(BaseModel):
     status: str
     status_label: str
     message: str | None = None
+    report_body: str | None = None
+    report_submitted_at: datetime | None = None
+    report_awaiting_org_review: bool = False
+    report_rejection_reason: str | None = None
+    can_complete: bool = False
+    can_reject_report: bool = False
 
 
 class OrgIncomingVolunteerResponseListResponse(BaseModel):

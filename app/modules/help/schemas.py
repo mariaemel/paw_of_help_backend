@@ -13,6 +13,7 @@ class HelpAnimalCard(BaseModel):
     name: str
     species_tag: str
     age_tag: str
+    age_months: int = 0
     status_chip: str | None = None
     organization_name: str | None = None
     location_city: str | None = None

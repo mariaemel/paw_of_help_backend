@@ -15,6 +15,7 @@ from app.modules.help_requests.requisites import (
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.schemas import (
     HELP_TYPE_OPTIONS,
+    VOLUNTEER_TASK_TYPE_OPTIONS,
     CatalogOption,
     HelpRequestPaymentDetails,
     UrgentCatalogsResponse,
@@ -25,8 +26,36 @@ from app.modules.urgent.schemas import (
     UrgentRequestListItem,
     UrgentRequestUpdate,
 )
+from app.modules.volunteers.constants import COMPETENCY_OPTIONS
+
+_ALLOWED_COMPETENCY_SLUGS = {x["id"] for x in COMPETENCY_OPTIONS}
 
 _HELP_TYPE_LABEL = {x["id"]: x["label"] for x in HELP_TYPE_OPTIONS}
+_HELP_TYPE_LABEL.update({x["id"]: x["label"] for x in COMPETENCY_OPTIONS})
+
+
+def _normalize_volunteer_task_fields(
+    *,
+    volunteer_needed: bool,
+    help_type: str,
+    volunteer_competencies: list[str],
+) -> tuple[str, list[str]]:
+    if not volunteer_needed:
+        return help_type, volunteer_competencies
+
+    slug = (help_type or "").strip().lower()
+    comps = [str(c).strip().lower() for c in volunteer_competencies if str(c).strip()]
+
+    if slug in _ALLOWED_COMPETENCY_SLUGS:
+        if slug not in comps:
+            comps = [slug, *comps]
+        return slug, comps
+
+    for c in comps:
+        if c in _ALLOWED_COMPETENCY_SLUGS:
+            return c, comps if c in comps else [c, *comps]
+
+    return "manual", ["manual"]
 
 
 class UrgentService:
@@ -150,6 +179,7 @@ class UrgentService:
             cities=cities,
             species=[CatalogOption(id="all", label="Все")] + [CatalogOption(id=s, label=s) for s in species],
             help_types=[CatalogOption(**x) for x in HELP_TYPE_OPTIONS],
+            volunteer_task_types=[CatalogOption(**x) for x in VOLUNTEER_TASK_TYPE_OPTIONS],
             statuses=[
                 CatalogOption(id="open", label="Открыта"),
                 CatalogOption(id="in_progress", label="В работе"),
@@ -180,6 +210,11 @@ class UrgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Animal must belong to same organization",
                 )
+        help_type, volunteer_competencies = _normalize_volunteer_task_fields(
+            volunteer_needed=payload.volunteer_needed,
+            help_type=payload.help_type,
+            volunteer_competencies=payload.volunteer_competencies,
+        )
         req = HelpRequest(
             organization_id=org.id,
             animal_id=payload.animal_id,
@@ -189,11 +224,11 @@ class UrgentService:
             address=payload.address,
             latitude=payload.latitude,
             longitude=payload.longitude,
-            help_type=payload.help_type,
+            help_type=help_type,
             is_urgent=payload.is_urgent,
             volunteer_needed=payload.volunteer_needed,
             volunteer_requirements=payload.volunteer_requirements,
-            volunteer_competencies_json=json.dumps(payload.volunteer_competencies, ensure_ascii=False),
+            volunteer_competencies_json=json.dumps(volunteer_competencies, ensure_ascii=False),
             target_amount=payload.target_amount,
             deadline_at=payload.deadline_at,
             deadline_note=payload.deadline_note,
@@ -238,7 +273,6 @@ class UrgentService:
             "address",
             "latitude",
             "longitude",
-            "help_type",
             "is_urgent",
             "volunteer_needed",
             "volunteer_requirements",
@@ -252,8 +286,30 @@ class UrgentService:
             value = getattr(payload, field)
             if value is not None:
                 setattr(req, field, value)
+
+        volunteer_needed = req.volunteer_needed
+        if payload.volunteer_needed is not None:
+            volunteer_needed = payload.volunteer_needed
+
+        help_type = payload.help_type if payload.help_type is not None else req.help_type
+        comps: list[str] = []
+        if req.volunteer_competencies_json:
+            try:
+                raw = json.loads(req.volunteer_competencies_json)
+                if isinstance(raw, list):
+                    comps = [str(x) for x in raw]
+            except json.JSONDecodeError:
+                comps = []
         if payload.volunteer_competencies is not None:
-            req.volunteer_competencies_json = json.dumps(payload.volunteer_competencies, ensure_ascii=False)
+            comps = payload.volunteer_competencies
+
+        help_type, comps = _normalize_volunteer_task_fields(
+            volunteer_needed=volunteer_needed,
+            help_type=help_type,
+            volunteer_competencies=comps,
+        )
+        req.help_type = help_type
+        req.volunteer_competencies_json = json.dumps(comps, ensure_ascii=False)
         if "bank_account" in payload.model_fields_set:
             self._apply_payment_bank_account(req, org, payload.bank_account)
         self.repo.db.commit()

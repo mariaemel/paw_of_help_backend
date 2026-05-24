@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from app.models.help_request import HelpRequest
+from app.modules.urgent.schemas import FUNDRAISING_HELP_TYPE_IDS
+from app.modules.volunteers.constants import COMPETENCY_OPTIONS
+
+_FUNDRAISING_HELP_TYPES = FUNDRAISING_HELP_TYPE_IDS
+_VOLUNTEER_TASK_HELP_TYPES = frozenset(x["id"] for x in COMPETENCY_OPTIONS)
 
 
 def help_bucket_for_request(hr: HelpRequest) -> str | None:
@@ -10,6 +15,11 @@ def help_bucket_for_request(hr: HelpRequest) -> str | None:
         return None
 
     t = (hr.help_type or "").strip().lower()
+    if t in _VOLUNTEER_TASK_HELP_TYPES:
+        return None
+    if hr.volunteer_needed and t not in _FUNDRAISING_HELP_TYPES:
+        return None
+
     if t == "medical":
         return "heal"
     if t == "food":
@@ -20,7 +30,5 @@ def help_bucket_for_request(hr: HelpRequest) -> str | None:
             return "heal"
         if any(k in blob for k in ("корм", "гастро", "пащтет", "кормление")):
             return "feed"
-        return "other"
-    if t in ("manual", "auto", "foster"):
         return "other"
     return None

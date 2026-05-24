@@ -208,33 +208,30 @@ class AccountRepository:
             .first()
         )
 
-    def count_org_animals(self, organization_id: int, q: str | None) -> int:
-        query = self.db.query(Animal).filter(
-            Animal.organization_id == organization_id,
-            Animal.status != "archived",
-        )
+    def _org_animals_query(self, organization_id: int, q: str | None, tab: str):
+        query = self.db.query(Animal).filter(Animal.organization_id == organization_id)
+        if tab == "archive":
+            query = query.filter(Animal.status == "archived")
+        else:
+            query = query.filter(Animal.status != "archived")
         if q and q.strip():
             like = f"%{q.strip().lower()}%"
             query = query.filter(func.lower(Animal.name).like(like))
-        return int(query.count() or 0)
+        return query
 
-    def list_org_animals(self, organization_id: int, q: str | None, limit: int, offset: int) -> list[Animal]:
-        query = (
-            self.db.query(Animal)
+    def count_org_animals(self, organization_id: int, q: str | None, tab: str = "active") -> int:
+        return int(self._org_animals_query(organization_id, q, tab).count() or 0)
+
+    def list_org_animals(
+        self, organization_id: int, q: str | None, limit: int, offset: int, tab: str = "active"
+    ) -> list[Animal]:
+        return (
+            self._org_animals_query(organization_id, q, tab)
             .options(
                 joinedload(Animal.photos),
                 selectinload(Animal.catalog_assignments).selectinload(AnimalCatalogAssignment.catalog_item),
             )
-            .filter(
-                Animal.organization_id == organization_id,
-                Animal.status != "archived",
-            )
-        )
-        if q and q.strip():
-            like = f"%{q.strip().lower()}%"
-            query = query.filter(func.lower(Animal.name).like(like))
-        return (
-            query.order_by(Animal.created_at.desc(), Animal.id.desc())
+            .order_by(Animal.created_at.desc(), Animal.id.desc())
             .offset(offset)
             .limit(limit)
             .all()
@@ -452,6 +449,62 @@ class AccountRepository:
             )
             .first()
         )
+
+    def merge_duplicate_org_chat_dialogs(self) -> int:
+        dup_groups = (
+            self.db.query(
+                OrgChatDialog.organization_id,
+                OrgChatDialog.participant_user_id,
+            )
+            .filter(OrgChatDialog.participant_user_id.isnot(None))
+            .group_by(OrgChatDialog.organization_id, OrgChatDialog.participant_user_id)
+            .having(func.count(OrgChatDialog.id) > 1)
+            .all()
+        )
+        removed = 0
+        for org_id, participant_id in dup_groups:
+            dialogs = (
+                self.db.query(OrgChatDialog)
+                .filter(
+                    OrgChatDialog.organization_id == org_id,
+                    OrgChatDialog.participant_user_id == participant_id,
+                )
+                .order_by(
+                    OrgChatDialog.last_message_at.desc().nullslast(),
+                    OrgChatDialog.updated_at.desc(),
+                    OrgChatDialog.id.desc(),
+                )
+                .all()
+            )
+            if len(dialogs) < 2:
+                continue
+            keep = dialogs[0]
+            for dup in dialogs[1:]:
+                self.db.query(OrgChatMessage).filter(OrgChatMessage.dialog_id == dup.id).update(
+                    {OrgChatMessage.dialog_id: keep.id},
+                    synchronize_session=False,
+                )
+                keep.unread_count_org = int(keep.unread_count_org or 0) + int(dup.unread_count_org or 0)
+                keep.unread_count_volunteer = int(keep.unread_count_volunteer or 0) + int(
+                    dup.unread_count_volunteer or 0
+                )
+                keep.unread_count_user = int(keep.unread_count_user or 0) + int(dup.unread_count_user or 0)
+                dup_at = dup.last_message_at
+                keep_at = keep.last_message_at
+                if dup_at and (keep_at is None or dup_at > keep_at):
+                    keep.last_message_preview = dup.last_message_preview
+                    keep.last_message_at = dup_at
+                if not keep.context_title and dup.context_title:
+                    keep.context_title = dup.context_title
+                if not keep.context_type and dup.context_type:
+                    keep.context_type = dup.context_type
+                if keep.context_entity_id is None and dup.context_entity_id is not None:
+                    keep.context_entity_id = dup.context_entity_id
+                self.db.delete(dup)
+                removed += 1
+        if removed:
+            self.db.flush()
+        return removed
 
     def list_org_dialogs(self, organization_id: int, q: str | None, limit: int, offset: int):
         query = self.db.query(OrgChatDialog).filter(OrgChatDialog.organization_id == organization_id)

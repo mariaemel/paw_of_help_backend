@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_roles
+from app.core.deps import get_current_user_optional, require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.modules.knowledge.repository import KnowledgeRepository
@@ -10,6 +10,7 @@ from app.modules.knowledge.schemas import (
     KnowledgeDetail,
     KnowledgeFilterParams,
     KnowledgeListResponse,
+    KnowledgeMineListResponse,
     KnowledgeUpdateRequest,
     KnowledgeUpsertRequest,
 )
@@ -20,6 +21,9 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 def get_knowledge_service(db: Session = Depends(get_db)) -> KnowledgeService:
     return KnowledgeService(KnowledgeRepository(db))
+
+
+_kb_writers = require_roles(UserRole.VOLUNTEER, UserRole.ORGANIZATION)
 
 
 @router.get("", response_model=KnowledgeListResponse)
@@ -48,12 +52,23 @@ def knowledge_catalogs(service: KnowledgeService = Depends(get_knowledge_service
     return service.get_catalogs()
 
 
+@router.get("/mine", response_model=KnowledgeMineListResponse)
+def list_my_articles(
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(_kb_writers),
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    return service.list_my_articles(user, limit=limit, offset=offset)
+
+
 @router.get("/{article_id}", response_model=KnowledgeDetail)
-def article_detail(article_id: int, service: KnowledgeService = Depends(get_knowledge_service)):
-    return service.get_detail(article_id)
-
-
-_kb_writers = require_roles(UserRole.VOLUNTEER, UserRole.ORGANIZATION)
+def article_detail(
+    article_id: int,
+    viewer: User | None = Depends(get_current_user_optional),
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    return service.get_detail(article_id, viewer=viewer)
 
 
 @router.post("", response_model=KnowledgeDetail)

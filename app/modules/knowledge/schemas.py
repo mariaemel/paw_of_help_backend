@@ -33,6 +33,18 @@ class KnowledgeListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class KnowledgeMineItem(KnowledgeListItem):
+    author_user_id: int | None = None
+    is_published: bool
+    is_archived: bool
+    can_edit: bool = True
+
+
+class KnowledgeMineListResponse(BaseModel):
+    total: int
+    items: list[KnowledgeMineItem]
+
+
 class KnowledgeDetail(BaseModel):
     id: int
     title: str
@@ -44,6 +56,8 @@ class KnowledgeDetail(BaseModel):
     read_minutes: int
     is_context_tip: bool
     owner_role: str
+    author_user_id: int | None = None
+    can_edit: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -23,6 +23,7 @@ from app.modules.account.storage import (
     save_org_chat_message_photo,
     save_profile_avatar,
 )
+from app.modules.animals.age_format import format_age_months_ru
 from app.modules.animals.jsonutil import parse_json_list
 from app.modules.animals.tags import species_label_ru
 from app.modules.organizations.service import OrganizationService
@@ -53,6 +54,7 @@ _ALLOWED_COMPETENCY_SLUGS = {x["id"] for x in COMPETENCY_OPTIONS}
 _ALLOWED_EXPERIENCE = {x["id"] for x in EXPERIENCE_LEVEL_OPTIONS}
 
 _HELP_TYPE_LABELS: dict[str, str] = {x["id"]: x["label"] for x in HELP_TYPE_OPTIONS}
+_HELP_TYPE_LABELS.update({x["id"]: x["label"] for x in COMPETENCY_OPTIONS})
 
 
 def _help_request_deadline_label(deadline_at: datetime | None, deadline_note: str | None) -> str | None:
@@ -71,28 +73,6 @@ def _description_snippet(text: str | None, max_len: int = 220) -> str:
     if len(t) <= max_len:
         return t
     return t[: max_len - 1].rstrip() + "…"
-
-
-def _age_label_ru(months: int) -> str:
-    if months is None or months <= 0:
-        return "Возраст не указан"
-    years = months // 12
-    mo = months % 12
-    if years <= 0:
-        if mo == 1:
-            return "1 месяц"
-        if 2 <= mo <= 4:
-            return f"{mo} месяца"
-        return f"{mo} месяцев"
-    if years == 1:
-        y = "1 год"
-    elif 2 <= years <= 4:
-        y = f"{years} года"
-    else:
-        y = f"{years} лет"
-    if mo == 0:
-        return y
-    return f"{y} {mo} мес."
 
 
 def _primary_photo_url(animal) -> str | None:
@@ -511,7 +491,7 @@ class AccountService:
             animal_name=a.name if a else "?",
             species_label=species_label_ru(a.species if a else "cat", a.sex if a else "unknown"),
             breed=a.breed if a else None,
-            age_label=_age_label_ru(int(a.age_months or 0) if a else 0),
+            age_label=format_age_months_ru(int(a.age_months or 0) if a else 0),
             primary_photo_url=_primary_photo_url(a),
             organization_name=org_name,
             created_at=row.created_at,
@@ -801,14 +781,17 @@ class AccountService:
         row = self.repo.get_volunteer_response(response_id, user.id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
-        if row.status != VolunteerHelpResponseStatus.COMPLETED.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Просмотр отчёта доступен для завершённых откликов",
-            )
         rep = row.report
         if rep is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отчёт не найден")
+        if row.status not in (
+            VolunteerHelpResponseStatus.ACCEPTED.value,
+            VolunteerHelpResponseStatus.COMPLETED.value,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Отчёт пока недоступен для этого отклика",
+            )
         return s.VolunteerReportOut(
             id=rep.id,
             volunteer_help_response_id=rep.volunteer_help_response_id,
@@ -1049,10 +1032,12 @@ class AccountService:
             created_at=a.created_at,
         )
 
-    def list_org_animals(self, user: User, q: str | None, limit: int, offset: int) -> s.OrgOwnedAnimalListResponse:
+    def list_org_animals(
+        self, user: User, q: str | None, limit: int, offset: int, tab: str = "active"
+    ) -> s.OrgOwnedAnimalListResponse:
         org = self._organization_for_user(user)
-        total = self.repo.count_org_animals(org.id, q)
-        rows = self.repo.list_org_animals(org.id, q, limit, offset)
+        total = self.repo.count_org_animals(org.id, q, tab)
+        rows = self.repo.list_org_animals(org.id, q, limit, offset, tab)
         return s.OrgOwnedAnimalListResponse(total=total, items=[self._org_owned_animal_item(a) for a in rows])
 
     def create_org_animal(self, user: User, payload: s.OrgOwnedAnimalCreate) -> s.OrgOwnedAnimalItem:
@@ -1142,7 +1127,9 @@ class AccountService:
 
     @staticmethod
     def _help_type_group(help_type: str) -> str:
-        return "fundraising" if help_type in ("financial", "food", "medical") else "volunteer_task"
+        from app.modules.urgent.schemas import FUNDRAISING_HELP_TYPE_IDS
+
+        return "fundraising" if help_type in FUNDRAISING_HELP_TYPE_IDS else "volunteer_task"
 
     def _org_owned_help_item(self, row: HelpRequest) -> s.OrgOwnedHelpRequestItem:
         return s.OrgOwnedHelpRequestItem(
@@ -1233,33 +1220,17 @@ class AccountService:
         self.repo.db.commit()
         return self.get_org_incoming_adoption(user, application_id)
 
-    def list_org_incoming_volunteer_responses(
-        self, user: User, q: str | None, status_value: str | None, limit: int, offset: int
-    ) -> s.OrgIncomingVolunteerResponseListResponse:
-        org = self._organization_for_user(user)
-        total = self.repo.count_org_volunteer_responses(org.id, q, status_value)
-        rows = self.repo.list_org_volunteer_responses(org.id, q, status_value, limit, offset)
-        items = [
-            s.OrgIncomingVolunteerResponseItem(
-                id=r.id,
-                volunteer_user_id=r.volunteer_user_id,
-                volunteer_name=(r.volunteer.full_name if r.volunteer else None) or f"Волонтёр #{r.volunteer_user_id}",
-                help_request_id=r.help_request_id,
-                help_request_title=r.help_request.title if r.help_request else "?",
-                created_at=r.created_at,
-                status=r.status,
-                status_label=s.VOLUNTEER_RESPONSE_STATUS_LABELS.get(r.status, r.status),
-                message=r.message,
-            )
-            for r in rows
-        ]
-        return s.OrgIncomingVolunteerResponseListResponse(total=total, items=items)
-
-    def get_org_incoming_volunteer_response(self, user: User, response_id: int) -> s.OrgIncomingVolunteerResponseItem:
-        org = self._organization_for_user(user)
-        r = self.repo.get_org_volunteer_response(org.id, response_id)
-        if r is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+    def _org_incoming_volunteer_item(self, r: VolunteerHelpResponse) -> s.OrgIncomingVolunteerResponseItem:
+        rep = r.report
+        st = r.status
+        report_awaiting = bool(
+            st == VolunteerHelpResponseStatus.ACCEPTED.value
+            and rep is not None
+            and rep.org_accepted_at is None
+            and rep.org_rejection_reason is None
+        )
+        can_complete = st == VolunteerHelpResponseStatus.ACCEPTED.value
+        can_reject_report = report_awaiting
         return s.OrgIncomingVolunteerResponseItem(
             id=r.id,
             volunteer_user_id=r.volunteer_user_id,
@@ -1267,10 +1238,65 @@ class AccountService:
             help_request_id=r.help_request_id,
             help_request_title=r.help_request.title if r.help_request else "?",
             created_at=r.created_at,
-            status=r.status,
-            status_label=s.VOLUNTEER_RESPONSE_STATUS_LABELS.get(r.status, r.status),
+            status=st,
+            status_label=s.VOLUNTEER_RESPONSE_STATUS_LABELS.get(st, st),
             message=r.message,
+            report_body=rep.body if rep else None,
+            report_submitted_at=rep.submitted_at if rep else None,
+            report_awaiting_org_review=report_awaiting,
+            report_rejection_reason=rep.org_rejection_reason if rep else None,
+            can_complete=can_complete,
+            can_reject_report=can_reject_report,
         )
+
+    def list_org_incoming_volunteer_responses(
+        self, user: User, q: str | None, status_value: str | None, limit: int, offset: int
+    ) -> s.OrgIncomingVolunteerResponseListResponse:
+        org = self._organization_for_user(user)
+        total = self.repo.count_org_volunteer_responses(org.id, q, status_value)
+        rows = self.repo.list_org_volunteer_responses(org.id, q, status_value, limit, offset)
+        items = [self._org_incoming_volunteer_item(r) for r in rows]
+        return s.OrgIncomingVolunteerResponseListResponse(total=total, items=items)
+
+    def get_org_incoming_volunteer_response(self, user: User, response_id: int) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        return self._org_incoming_volunteer_item(r)
+
+    def _complete_volunteer_help_response(self, response: VolunteerHelpResponse) -> None:
+        now = datetime.utcnow()
+        response.status = VolunteerHelpResponseStatus.COMPLETED.value
+        response.updated_at = now
+        rep = response.report
+        if rep is not None and rep.org_accepted_at is None:
+            rep.org_accepted_at = now
+            rep.org_rejection_reason = None
+        hr = response.help_request
+        if hr is not None:
+            hr.status = "closed"
+            hr.updated_at = now
+
+    def _on_volunteer_response_accepted(self, accepted: VolunteerHelpResponse) -> None:
+        now = datetime.utcnow()
+        hr = accepted.help_request
+        if hr is not None:
+            hr.status = "in_progress"
+            hr.updated_at = now
+
+        siblings = (
+            self.repo.db.query(VolunteerHelpResponse)
+            .filter(
+                VolunteerHelpResponse.help_request_id == accepted.help_request_id,
+                VolunteerHelpResponse.id != accepted.id,
+                VolunteerHelpResponse.status == VolunteerHelpResponseStatus.PENDING.value,
+            )
+            .all()
+        )
+        for row in siblings:
+            row.status = VolunteerHelpResponseStatus.REJECTED.value
+            row.updated_at = now
 
     def accept_org_incoming_volunteer_response(self, user: User, response_id: int) -> s.OrgIncomingVolunteerResponseItem:
         org = self._organization_for_user(user)
@@ -1281,7 +1307,24 @@ class AccountService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отклик уже обработан")
         r.status = VolunteerHelpResponseStatus.ACCEPTED.value
         r.updated_at = datetime.utcnow()
+        self._on_volunteer_response_accepted(r)
         self._ensure_volunteer_response_dialog(org, r)
+        self.repo.db.commit()
+        return self.get_org_incoming_volunteer_response(user, response_id)
+
+    def complete_org_incoming_volunteer_response(
+        self, user: User, response_id: int
+    ) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        if r.status != VolunteerHelpResponseStatus.ACCEPTED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Завершить можно только отклик в статусе «В работе»",
+            )
+        self._complete_volunteer_help_response(r)
         self.repo.db.commit()
         return self.get_org_incoming_volunteer_response(user, response_id)
 
@@ -1298,6 +1341,30 @@ class AccountService:
         reason = (payload.reason or "").strip()
         if reason:
             r.message = reason
+        r.updated_at = datetime.utcnow()
+        self.repo.db.commit()
+        return self.get_org_incoming_volunteer_response(user, response_id)
+
+    def reject_org_incoming_volunteer_report(
+        self, user: User, response_id: int, payload: s.OrgIncomingRejectRequest
+    ) -> s.OrgIncomingVolunteerResponseItem:
+        org = self._organization_for_user(user)
+        r = self.repo.get_org_volunteer_response(org.id, response_id)
+        if r is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
+        if r.status != VolunteerHelpResponseStatus.ACCEPTED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Отклонить отчёт можно только по отклику в работе",
+            )
+        rep = r.report
+        if rep is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Волонтёр ещё не отправил отчёт")
+        if rep.org_accepted_at is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отчёт уже принят")
+        reason = (payload.reason or "").strip() or "Нужны уточнения по отчёту"
+        rep.org_rejection_reason = reason
+        rep.org_accepted_at = None
         r.updated_at = datetime.utcnow()
         self.repo.db.commit()
         return self.get_org_incoming_volunteer_response(user, response_id)
@@ -1333,6 +1400,7 @@ class AccountService:
                 unread_count_user=0,
             )
         )
+        self.repo.db.flush()
 
     def _chat_thread_id_for_participant(
         self, organization_id: int | None, participant_user_id: int
@@ -1368,11 +1436,16 @@ class AccountService:
             )
 
     def _dialog_item(self, row) -> s.OrgCommsDialogItem:
+        avatar_path = row.participant_avatar_path
+        if not avatar_path and row.participant_user_id:
+            participant = self.repo.get_user_by_id_with_profiles(int(row.participant_user_id))
+            if participant is not None:
+                _, avatar_path = self._participant_display(participant)
         return s.OrgCommsDialogItem(
             id=row.id,
             participant_user_id=row.participant_user_id,
             participant_name=row.participant_name,
-            participant_avatar_url=self._media_url(row.participant_avatar_path),
+            participant_avatar_url=self._media_url(avatar_path),
             context_type=row.context_type,
             context_entity_id=row.context_entity_id,
             context_title=row.context_title,
@@ -1550,6 +1623,7 @@ class AccountService:
             unread_count_user=0,
         )
         self.repo.db.add(dialog)
+        self.repo.db.flush()
         self.repo.db.commit()
         self.repo.db.refresh(dialog)
         return self._dialog_item(dialog)
@@ -1976,10 +2050,8 @@ class AccountService:
         )
 
     def list_org_articles(self, user: User, limit: int, offset: int) -> s.OrgArticleListResponse:
-        org = self._organization_for_user(user)
-        if org.owner_user_id is None:
-            return s.OrgArticleListResponse(total=0, items=[])
-        total, rows = self.repo.list_org_articles(int(org.owner_user_id), limit, offset)
+        self._organization_for_user(user)
+        total, rows = self.repo.list_org_articles(int(user.id), limit, offset)
         return s.OrgArticleListResponse(
             total=total,
             items=[
