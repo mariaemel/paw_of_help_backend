@@ -2,7 +2,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.adoption_application import AnimalAdoptionApplication
-from app.models.animal import Animal
+from app.models.animal import Animal, AnimalPhoto
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.help_request import HelpRequest
 from app.models.org_chat import OrgChatDialog, OrgChatMessage
@@ -15,6 +15,7 @@ from app.models.profile import UserProfile, VolunteerProfile
 from app.models.user import User, UserRole
 from app.models.volunteer_competency import VolunteerCompetencyAssignment
 from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
+from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
 
 
 class AccountRepository:
@@ -169,7 +170,9 @@ class AccountRepository:
             self.db.query(VolunteerHelpResponse)
             .options(
                 joinedload(VolunteerHelpResponse.help_request).joinedload(HelpRequest.organization),
-                joinedload(VolunteerHelpResponse.report),
+                joinedload(VolunteerHelpResponse.report).selectinload(
+                    VolunteerHelpResponseReport.photos
+                ),
             )
             .filter(
                 VolunteerHelpResponse.id == response_id,
@@ -212,7 +215,7 @@ class AccountRepository:
         query = self.db.query(Animal).filter(Animal.organization_id == organization_id)
         if tab == "archive":
             query = query.filter(Animal.status == "archived")
-        else:
+        elif tab != "all":
             query = query.filter(Animal.status != "archived")
         if q and q.strip():
             like = f"%{q.strip().lower()}%"
@@ -246,6 +249,32 @@ class AccountRepository:
             )
             .filter(Animal.organization_id == organization_id, Animal.id == animal_id)
             .first()
+        )
+
+    def promote_pending_animal_photos(self, animal_id: int) -> None:
+        pending = (
+            self.db.query(AnimalPhoto)
+            .filter(AnimalPhoto.animal_id == animal_id, AnimalPhoto.is_pending.is_(True))
+            .order_by(AnimalPhoto.id.asc())
+            .all()
+        )
+        if not pending:
+            return
+        primary_pending = next((p for p in pending if p.is_primary), None)
+        for photo in pending:
+            photo.is_pending = False
+        if primary_pending is not None:
+            self.db.query(AnimalPhoto).filter(AnimalPhoto.animal_id == animal_id).update(
+                {AnimalPhoto.is_primary: False}
+            )
+            primary_pending.is_primary = True
+
+    def discard_pending_animal_photos(self, animal_id: int) -> int:
+        return int(
+            self.db.query(AnimalPhoto)
+            .filter(AnimalPhoto.animal_id == animal_id, AnimalPhoto.is_pending.is_(True))
+            .delete(synchronize_session=False)
+            or 0
         )
 
     def set_animal_catalog_slugs(

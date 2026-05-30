@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 from app.models.knowledge import KnowledgeArticle
 from app.models.user import User, UserRole
+from app.modules.knowledge.hints import HintContext, pick_hints
 from app.modules.knowledge.repository import KnowledgeRepository
 from app.modules.knowledge.schemas import (
     KB_CATEGORY_OPTIONS,
@@ -13,6 +14,9 @@ from app.modules.knowledge.schemas import (
     KnowledgeCatalogsResponse,
     KnowledgeDetail,
     KnowledgeFilterParams,
+    KnowledgeHintItem,
+    KnowledgeHintRequestParams,
+    KnowledgeHintsResponse,
     KnowledgeListItem,
     KnowledgeListResponse,
     KnowledgeMineItem,
@@ -108,10 +112,12 @@ class KnowledgeService:
             self._ensure_can_edit(row, viewer)
         return self._to_detail(row, viewer)
 
-    def list_my_articles(self, user: User, limit: int = 100, offset: int = 0) -> KnowledgeMineListResponse:
+    def list_my_articles(
+        self, user: User, limit: int = 100, offset: int = 0, tab: str = "all"
+    ) -> KnowledgeMineListResponse:
         self._ensure_writer(user)
         owner_role = self._user_role_value(user)
-        total, rows = self.repo.list_my_articles(int(user.id), owner_role, limit, offset)
+        total, rows = self.repo.list_my_articles(int(user.id), owner_role, limit, offset, tab=tab)
         items = [
             KnowledgeMineItem(
                 id=a.id,
@@ -131,6 +137,31 @@ class KnowledgeService:
             for a in rows
         ]
         return KnowledgeMineListResponse(total=total, items=items)
+
+    def list_context_hints(self, params: KnowledgeHintRequestParams) -> KnowledgeHintsResponse:
+        ctx = HintContext(
+            help_type=params.help_type,
+            animal_species=params.animal_species,
+            competency_slugs=frozenset(s.strip().lower() for s in params.competency_slugs if s.strip()),
+            keywords=frozenset(k.strip().lower() for k in params.keywords if k.strip()),
+        )
+        candidates = self.repo.list_context_tip_candidates()
+        picked = pick_hints(candidates, ctx, limit=params.limit)
+        items = [
+            KnowledgeHintItem(
+                id=row.article.id,
+                title=row.article.title,
+                summary=row.article.summary,
+                cover_url=self._cover_url(row.article.cover_path),
+                category=row.article.category,
+                category_label=_CATEGORY_LABELS.get(row.article.category),
+                read_minutes=row.article.read_minutes,
+                match_score=row.score,
+                match_reasons=list(row.reasons),
+            )
+            for row in picked
+        ]
+        return KnowledgeHintsResponse(total=len(items), items=items)
 
     def _to_detail(self, row: KnowledgeArticle, viewer: User | None = None) -> KnowledgeDetail:
         return KnowledgeDetail(

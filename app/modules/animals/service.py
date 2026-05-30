@@ -31,9 +31,10 @@ class AnimalService:
         self.repo = repo
 
     def _item_dict(self, animal) -> dict:
-        primary_photo = next((p for p in animal.photos if p.is_primary), None)
-        if not primary_photo and animal.photos:
-            primary_photo = animal.photos[0]
+        committed = [p for p in animal.photos if not getattr(p, "is_pending", False)] if animal.photos else []
+        primary_photo = next((p for p in committed if p.is_primary), None)
+        if not primary_photo and committed:
+            primary_photo = committed[0]
         primary_photo_url = (
             f"{settings.media_url_prefix}/{primary_photo.file_path}" if primary_photo else None
         )
@@ -88,11 +89,14 @@ class AnimalService:
         animal = self.repo.get_by_id(animal_id)
         if not animal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+        if animal.status in ("archived", "adopted"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
 
-        primary_photo = next((p for p in animal.photos if p.is_primary), None)
-        if not primary_photo and animal.photos:
-            primary_photo = animal.photos[0]
-        photo_urls = [f"{settings.media_url_prefix}/{p.file_path}" for p in animal.photos]
+        committed = [p for p in animal.photos if not getattr(p, "is_pending", False)] if animal.photos else []
+        primary_photo = next((p for p in committed if p.is_primary), None)
+        if not primary_photo and committed:
+            primary_photo = committed[0]
+        photo_urls = [f"{settings.media_url_prefix}/{p.file_path}" for p in committed]
         species = getattr(animal, "species", None) or "cat"
         breed = getattr(animal, "breed", None)
         age_m = getattr(animal, "age_months", 0) or 0
@@ -148,7 +152,7 @@ class AnimalService:
                     deadline_at=r.deadline_at,
                 )
                 for r in (animal.help_requests or [])
-                if not r.is_archived and r.is_published
+                if not r.is_archived and r.is_published and (r.status or "").strip().lower() != "closed"
             ],
             created_at=animal.created_at,
         )
@@ -176,7 +180,69 @@ class AnimalService:
             file_path = save_animal_image(settings.media_dir, animal_id, file)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        photo = self.repo.add_photo(animal_id=animal_id, file_path=file_path, is_primary=is_primary)
+        photo = self.repo.add_photo(animal_id=animal_id, file_path=file_path, is_primary=is_primary, is_pending=True)
+        return {
+            "id": photo.id,
+            "animal_id": photo.animal_id,
+            "is_primary": photo.is_primary,
+            "url": f"{settings.media_url_prefix}/{photo.file_path}",
+        }
+
+    def delete_image(self, animal_id: int, photo_id: int, user: User) -> None:
+        if user.role != UserRole.ORGANIZATION:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
+        animal = self.repo.get_by_id(animal_id)
+        if not animal or animal.organization_id != org.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+        photo = self.repo.get_photo(photo_id)
+        if photo is None or photo.animal_id != animal_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+        if photo.is_pending:
+            self.repo.delete_photo(photo_id)
+            return
+        self.repo.delete_photo(photo_id)
+
+    def discard_pending_images(self, animal_id: int, user: User) -> None:
+        if user.role != UserRole.ORGANIZATION:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
+        animal = self.repo.get_by_id(animal_id)
+        if not animal or animal.organization_id != org.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+        self.repo.delete_pending_photos(animal_id)
+
+    def set_primary_image(self, animal_id: int, photo_id: int, user: User) -> dict:
+        if user.role != UserRole.ORGANIZATION:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization role required")
+        org = (
+            self.repo.db.query(Organization)
+            .filter(Organization.owner_user_id == user.id)
+            .order_by(Organization.id.asc())
+            .first()
+        )
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Organization profile not found")
+        animal = self.repo.get_by_id(animal_id)
+        if not animal or animal.organization_id != org.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Animal not found")
+        photo = self.repo.set_primary_photo(animal_id, photo_id)
+        if photo is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
         return {
             "id": photo.id,
             "animal_id": photo.animal_id,

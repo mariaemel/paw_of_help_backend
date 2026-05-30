@@ -555,6 +555,71 @@ def ensure_sqlite_schema(engine: Engine) -> None:
             ka_cols = _table_columns(conn, "knowledge_articles")
             if "cover_path" not in ka_cols:
                 conn.execute(text("ALTER TABLE knowledge_articles ADD COLUMN cover_path VARCHAR(500)"))
+            for col, ddl in (
+                ("target_help_types_json", "TEXT"),
+                ("target_species_json", "TEXT"),
+                ("target_competency_slugs_json", "TEXT"),
+                ("keywords_json", "TEXT"),
+            ):
+                if col not in ka_cols:
+                    conn.execute(text(f"ALTER TABLE knowledge_articles ADD COLUMN {col} {ddl}"))
+
+        if _has_table(conn, "events"):
+            ev_cols = _table_columns(conn, "events")
+            if "entry_type" not in ev_cols:
+                conn.execute(
+                    text("ALTER TABLE events ADD COLUMN entry_type VARCHAR(20) NOT NULL DEFAULT 'free'")
+                )
+            if "capacity" not in ev_cols:
+                conn.execute(text("ALTER TABLE events ADD COLUMN capacity INTEGER"))
+            if "seats_taken" not in ev_cols:
+                conn.execute(
+                    text("ALTER TABLE events ADD COLUMN seats_taken INTEGER NOT NULL DEFAULT 0")
+                )
+
+        if _has_table(conn, "organization_reports"):
+            or_cols = _table_columns(conn, "organization_reports")
+            if "file_path" not in or_cols:
+                conn.execute(text("ALTER TABLE organization_reports ADD COLUMN file_path VARCHAR(500)"))
+
+        if _has_table(conn, "animal_photos"):
+            ap_cols = _table_columns(conn, "animal_photos")
+            if "is_pending" not in ap_cols:
+                conn.execute(
+                    text("ALTER TABLE animal_photos ADD COLUMN is_pending BOOLEAN NOT NULL DEFAULT 0")
+                )
+
+        if _has_table(conn, "organizations"):
+            org_cols = _table_columns(conn, "organizations")
+            if "logo_pending_path" not in org_cols:
+                conn.execute(text("ALTER TABLE organizations ADD COLUMN logo_pending_path VARCHAR(500)"))
+            if "cover_pending_path" not in org_cols:
+                conn.execute(text("ALTER TABLE organizations ADD COLUMN cover_pending_path VARCHAR(500)"))
+
+        if _has_table(conn, "volunteer_help_response_reports") and not _has_table(
+            conn, "volunteer_help_response_report_photos"
+        ):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE volunteer_help_response_report_photos (
+                        id INTEGER NOT NULL,
+                        report_id INTEGER NOT NULL,
+                        file_path VARCHAR(500) NOT NULL,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(report_id) REFERENCES volunteer_help_response_reports (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_vol_help_report_photos_report "
+                    "ON volunteer_help_response_report_photos (report_id)"
+                )
+            )
 
         if not _has_table(conn, "events"):
             conn.execute(

@@ -13,6 +13,7 @@ from app.modules.events.schemas import (
     EventDetail,
     EventFilterParams,
     EventListResponse,
+    EventRegistrationResponse,
     EventUpdateRequest,
 )
 from app.modules.events.service import EventService
@@ -70,6 +71,11 @@ def event_catalogs(service: EventService = Depends(get_event_service)):
 @router.get("/{event_id}", response_model=EventDetail)
 def event_detail(event_id: int, service: EventService = Depends(get_event_service)):
     return service.get_detail(event_id)
+
+
+@router.post("/{event_id}/register", response_model=EventRegistrationResponse)
+def register_for_event(event_id: int, service: EventService = Depends(get_event_service)):
+    return service.register_for_event(event_id)
 
 
 @router.post("", response_model=EventDetail)

@@ -11,12 +11,18 @@ from app.modules.account import schemas as s
 from app.modules.account.service import AccountService
 from app.modules.organizations.schemas import OrganizationPublicPage
 from app.modules.urgent.schemas import UrgentRequestCreate, UrgentRequestDetail, UrgentRequestUpdate
+from app.modules.volunteers.schemas import VolunteerCompletedTasksResponse, VolunteerTaskFeedResponse
+from app.modules.volunteers.task_feed_service import VolunteerTaskFeedService
 
 router = APIRouter(prefix="/me", tags=["profile"])
 
 
 def get_account_service(db: Session = Depends(get_db)) -> AccountService:
     return AccountService(AccountRepository(db))
+
+
+def get_volunteer_task_feed_service(db: Session = Depends(get_db)) -> VolunteerTaskFeedService:
+    return VolunteerTaskFeedService(db)
 
 
 def require_user_or_volunteer(user: User = Depends(get_current_user)) -> User:
@@ -61,6 +67,15 @@ def patch_my_profile(
     service: AccountService = Depends(get_account_service),
 ):
     return service.patch_profile(user, payload)
+
+
+@router.post("/become-volunteer", response_model=s.MeProfileResponse)
+def become_volunteer(
+    payload: s.BecomeVolunteerRequest,
+    user: User = Depends(require_plain_user_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.become_volunteer(user, payload)
 
 
 @router.post("/profile/avatar", response_model=s.AvatarUploadResponse)
@@ -179,11 +194,12 @@ def cancel_my_volunteer_response(
 @router.post("/volunteer/responses/{response_id}/report", response_model=s.VolunteerResponseDetail)
 def submit_my_volunteer_response_report(
     response_id: int,
-    payload: s.VolunteerReportCreate,
+    content: str = Form(..., min_length=10, max_length=16000),
+    files: list[UploadFile] = File(...),
     user: User = Depends(require_volunteer_role),
     service: AccountService = Depends(get_account_service),
 ):
-    return service.submit_volunteer_response_report(user, response_id, payload)
+    return service.submit_volunteer_response_report(user, response_id, content, files)
 
 
 @router.get("/volunteer/responses/{response_id}/report", response_model=s.VolunteerReportOut)
@@ -193,6 +209,27 @@ def get_my_volunteer_response_report(
     service: AccountService = Depends(get_account_service),
 ):
     return service.get_volunteer_response_report(user, response_id)
+
+
+@router.get("/volunteer/task-feed", response_model=VolunteerTaskFeedResponse)
+def list_my_volunteer_task_feed(
+    q: str | None = Query(default=None, description="Поиск по заголовку или описанию"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_volunteer_role),
+    service: VolunteerTaskFeedService = Depends(get_volunteer_task_feed_service),
+):
+    return service.list_personalized_feed(user, q=q, limit=limit, offset=offset)
+
+
+@router.get("/volunteer/completed-tasks", response_model=VolunteerCompletedTasksResponse)
+def list_my_volunteer_completed_tasks(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_volunteer_role),
+    service: VolunteerTaskFeedService = Depends(get_volunteer_task_feed_service),
+):
+    return service.list_completed_tasks(user, limit=limit, offset=offset)
 
 
 @router.get("/user/communications/dialogs", response_model=s.UserCommsDialogListResponse)
@@ -359,6 +396,22 @@ def get_org_profile_preview(
     return service.get_org_public_preview(user)
 
 
+@router.delete("/organization/profile/logo/pending", response_model=s.OrgCabinetProfileResponse)
+def discard_org_logo_pending(
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.discard_org_logo_pending(user)
+
+
+@router.delete("/organization/profile/cover/pending", response_model=s.OrgCabinetProfileResponse)
+def discard_org_cover_pending(
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.discard_org_cover_pending(user)
+
+
 @router.post("/organization/profile/logo", response_model=s.OrgAssetUploadResponse)
 def upload_org_logo(
     file: UploadFile = File(...),
@@ -390,9 +443,9 @@ def upload_org_gallery_image(
 @router.get("/organization/animals", response_model=s.OrgOwnedAnimalListResponse)
 def list_org_animals(
     q: str | None = Query(default=None, description="Поиск по кличке"),
-    tab: Literal["active", "archive"] = Query(
+    tab: Literal["active", "archive", "all"] = Query(
         default="active",
-        description="active — действующие анкеты; archive — архив",
+        description="active — действующие; archive — только архив; all — все анкеты",
     ),
     limit: int = Query(default=24, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -419,6 +472,15 @@ def update_org_animal(
     service: AccountService = Depends(get_account_service),
 ):
     return service.update_org_animal(user, animal_id, payload)
+
+
+@router.delete("/organization/animals/{animal_id}/images/pending", response_model=s.OrgOwnedAnimalItem)
+def discard_org_animal_pending_photos(
+    animal_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.discard_org_animal_pending_photos(user, animal_id)
 
 
 @router.post("/organization/animals/{animal_id}/archive", response_model=s.OrgOwnedAnimalItem)
@@ -634,6 +696,16 @@ def update_org_report(
     service: AccountService = Depends(get_account_service),
 ):
     return service.update_org_report(user, report_id, payload)
+
+
+@router.post("/organization/reports/{report_id}/file", response_model=s.OrgReportItem)
+def upload_org_report_file(
+    report_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.upload_org_report_file(user, report_id, file)
 
 
 @router.delete("/organization/reports/{report_id}", status_code=status.HTTP_204_NO_CONTENT)

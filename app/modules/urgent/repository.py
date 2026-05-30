@@ -26,6 +26,7 @@ class UrgentRepository:
                 HelpRequest.id == request_id,
                 HelpRequest.is_archived.is_(False),
                 HelpRequest.is_published.is_(True),
+                HelpRequest.status.in_(("open", "in_progress")),
             )
             .first()
         )
@@ -60,6 +61,7 @@ class UrgentRepository:
             HelpRequest.is_archived.is_(False),
             HelpRequest.is_published.is_(True),
             HelpRequest.is_urgent.is_(True),
+            HelpRequest.status.in_(("open", "in_progress")),
         )
         q = apply_text_search(q, filters.q, HelpRequest.title, HelpRequest.description)
         q = apply_city_filter(q, HelpRequest.city, filters.city)

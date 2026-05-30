@@ -19,6 +19,7 @@ from app.models.profile import (
 from app.models.user import User
 from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
 from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
+from app.models.volunteer_help_response_report_photo import VolunteerHelpResponseReportPhoto
 from app.models.verification_token import VerificationToken
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "AdoptionApplicationStatus",
     "VolunteerHelpResponse",
     "VolunteerHelpResponseReport",
+    "VolunteerHelpResponseReportPhoto",
     "VolunteerHelpResponseStatus",
     "Animal",
     "AnimalPhoto",

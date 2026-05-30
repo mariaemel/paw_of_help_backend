@@ -301,7 +301,13 @@ class OrganizationService:
             )
 
         reports_out = [
-            OrgPublicReport(id=r.id, title=r.title, published_at=r.published_at, summary=r.summary)
+            OrgPublicReport(
+                id=r.id,
+                title=r.title,
+                published_at=r.published_at,
+                summary=r.summary,
+                file_url=_media_url(getattr(r, "file_path", None)),
+            )
             for r in self.repo.list_org_reports(org.id)
         ]
 

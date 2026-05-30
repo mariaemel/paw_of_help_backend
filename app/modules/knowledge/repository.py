@@ -51,12 +51,16 @@ class KnowledgeRepository:
         return self.db.query(KnowledgeArticle).filter(KnowledgeArticle.id == article_id).first()
 
     def list_my_articles(
-        self, author_user_id: int, owner_role: str, limit: int, offset: int
+        self, author_user_id: int, owner_role: str, limit: int, offset: int, tab: str = "all"
     ) -> tuple[int, list[KnowledgeArticle]]:
         q = self.db.query(KnowledgeArticle).filter(
             KnowledgeArticle.author_user_id == author_user_id,
             KnowledgeArticle.owner_role == owner_role,
         )
+        if tab == "archive":
+            q = q.filter(KnowledgeArticle.is_archived.is_(True))
+        elif tab == "active":
+            q = q.filter(KnowledgeArticle.is_archived.is_(False))
         total = int(q.order_by(None).count() or 0)
         rows = (
             q.order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())
@@ -65,3 +69,16 @@ class KnowledgeRepository:
             .all()
         )
         return total, rows
+
+    def list_context_tip_candidates(self) -> list[KnowledgeArticle]:
+        return (
+            self.db.query(KnowledgeArticle)
+            .filter(
+                KnowledgeArticle.is_context_tip.is_(True),
+                KnowledgeArticle.is_archived.is_(False),
+                KnowledgeArticle.is_published.is_(True),
+            )
+            .order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())
+            .limit(500)
+            .all()
+        )

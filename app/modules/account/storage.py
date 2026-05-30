@@ -51,6 +51,56 @@ def save_org_asset(
     return str(relative_dir / filename).replace(os.sep, "/")
 
 
+def save_org_report_file(
+    media_dir: str,
+    organization_id: int,
+    report_id: int,
+    file: UploadFile,
+    max_size_bytes: int = 15 * 1024 * 1024,
+) -> str:
+    extension = Path(file.filename or "").suffix.lower()
+    allowed = ALLOWED_IMAGE_EXTENSIONS | {".pdf", ".doc", ".docx"}
+    if extension not in allowed:
+        raise ValueError("Недопустимый формат файла")
+    content = file.file.read()
+    if len(content) > max_size_bytes:
+        raise ValueError(f"Файл слишком большой. Максимум {max_size_bytes // (1024 * 1024)} МБ")
+
+    relative_dir = Path("organizations") / str(organization_id) / "reports" / str(report_id)
+    absolute_dir = Path(media_dir) / relative_dir
+    absolute_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{uuid4().hex}{extension}"
+    absolute_path = absolute_dir / filename
+    with absolute_path.open("wb") as out_file:
+        out_file.write(content)
+    return str(relative_dir / filename).replace(os.sep, "/")
+
+
+def save_volunteer_report_photo(
+    media_dir: str,
+    response_id: int,
+    file: UploadFile,
+    max_size_bytes: int = 5 * 1024 * 1024,
+) -> str:
+    extension = Path(file.filename or "").suffix.lower()
+    if extension not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError("Недопустимый формат файла. Допустимо: .jpg, .jpeg, .png, .webp")
+    content = file.file.read()
+    if len(content) > max_size_bytes:
+        raise ValueError(f"Файл слишком большой. Максимум {max_size_bytes // (1024 * 1024)} МБ")
+
+    relative_dir = Path("volunteer_reports") / str(response_id)
+    absolute_dir = Path(media_dir) / relative_dir
+    absolute_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{uuid4().hex}{extension}"
+    absolute_path = absolute_dir / filename
+    with absolute_path.open("wb") as out_file:
+        out_file.write(content)
+    return str(relative_dir / filename).replace(os.sep, "/")
+
+
 def save_org_chat_message_photo(
     media_dir: str,
     organization_id: int,

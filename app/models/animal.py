@@ -89,5 +89,6 @@ class AnimalPhoto(Base):
     animal_id: Mapped[int] = mapped_column(ForeignKey("animals.id"), index=True)
     file_path: Mapped[str] = mapped_column(String(500))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_pending: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     animal: Mapped[Animal] = relationship("Animal", back_populates="photos")

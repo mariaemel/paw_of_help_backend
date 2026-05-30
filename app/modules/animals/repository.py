@@ -84,17 +84,81 @@ class AnimalRepository:
             func.trim(func.coalesce(Animal.treatment_required, "")) != "",
         )
 
-    def add_photo(self, animal_id: int, file_path: str, is_primary: bool):
-        if is_primary:
-            self.db.query(AnimalPhoto).filter(AnimalPhoto.animal_id == animal_id).update(
-                {AnimalPhoto.is_primary: False}
-            )
+    def add_photo(self, animal_id: int, file_path: str, is_primary: bool, *, is_pending: bool = True):
+        if is_pending:
+            if is_primary:
+                self.db.query(AnimalPhoto).filter(
+                    AnimalPhoto.animal_id == animal_id,
+                    AnimalPhoto.is_pending.is_(True),
+                ).update({AnimalPhoto.is_primary: False})
+        elif is_primary:
+            self.db.query(AnimalPhoto).filter(
+                AnimalPhoto.animal_id == animal_id,
+                AnimalPhoto.is_pending.is_(False),
+            ).update({AnimalPhoto.is_primary: False})
 
-        photo = AnimalPhoto(animal_id=animal_id, file_path=file_path, is_primary=is_primary)
+        photo = AnimalPhoto(
+            animal_id=animal_id,
+            file_path=file_path,
+            is_primary=is_primary,
+            is_pending=is_pending,
+        )
         self.db.add(photo)
         self.db.commit()
         self.db.refresh(photo)
         return photo
+
+    def get_photo(self, photo_id: int) -> AnimalPhoto | None:
+        return self.db.query(AnimalPhoto).filter(AnimalPhoto.id == photo_id).first()
+
+    def delete_photo(self, photo_id: int) -> None:
+        self.db.query(AnimalPhoto).filter(AnimalPhoto.id == photo_id).delete(synchronize_session=False)
+        self.db.commit()
+
+    def set_primary_photo(self, animal_id: int, photo_id: int) -> AnimalPhoto | None:
+        photo = self.get_photo(photo_id)
+        if photo is None or photo.animal_id != animal_id:
+            return None
+        if photo.is_pending:
+            self.db.query(AnimalPhoto).filter(
+                AnimalPhoto.animal_id == animal_id,
+                AnimalPhoto.is_pending.is_(True),
+            ).update({AnimalPhoto.is_primary: False})
+        else:
+            self.db.query(AnimalPhoto).filter(
+                AnimalPhoto.animal_id == animal_id,
+                AnimalPhoto.is_pending.is_(False),
+            ).update({AnimalPhoto.is_primary: False})
+        photo.is_primary = True
+        self.db.commit()
+        self.db.refresh(photo)
+        return photo
+
+    def delete_pending_photos(self, animal_id: int) -> int:
+        deleted = (
+            self.db.query(AnimalPhoto)
+            .filter(AnimalPhoto.animal_id == animal_id, AnimalPhoto.is_pending.is_(True))
+            .delete(synchronize_session=False)
+        )
+        return int(deleted or 0)
+
+    def promote_pending_photos(self, animal_id: int) -> None:
+        pending = (
+            self.db.query(AnimalPhoto)
+            .filter(AnimalPhoto.animal_id == animal_id, AnimalPhoto.is_pending.is_(True))
+            .order_by(AnimalPhoto.id.asc())
+            .all()
+        )
+        if not pending:
+            return
+        primary_pending = next((p for p in pending if p.is_primary), None)
+        for photo in pending:
+            photo.is_pending = False
+        if primary_pending is not None:
+            self.db.query(AnimalPhoto).filter(AnimalPhoto.animal_id == animal_id).update(
+                {AnimalPhoto.is_primary: False}
+            )
+            primary_pending.is_primary = True
 
     def list_animals(self, filters: AnimalFilterParams) -> tuple[int, list[Animal]]:
         query = self.db.query(Animal).options(
@@ -107,6 +171,8 @@ class AnimalRepository:
         query = apply_city_filter(query, Animal.location_city, filters.city)
         if filters.status:
             query = query.filter(Animal.status == filters.status)
+        else:
+            query = query.filter(Animal.status.notin_(("archived", "adopted")))
         if filters.sex:
             query = query.filter(Animal.sex == filters.sex)
         if filters.species:

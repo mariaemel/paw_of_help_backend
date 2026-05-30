@@ -15,13 +15,16 @@ from app.models.profile import UserProfile, VolunteerProfile
 from app.models.volunteer_competency import VolunteerCompetencyAssignment, VolunteerCompetencyItem
 from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerHelpResponseStatus
 from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
+from app.models.volunteer_help_response_report_photo import VolunteerHelpResponseReportPhoto
 from app.models.user import User, UserRole
 from app.modules.account.repository import AccountRepository
 from app.modules.account import schemas as s
 from app.modules.account.storage import (
     save_org_asset,
     save_org_chat_message_photo,
+    save_org_report_file,
     save_profile_avatar,
+    save_volunteer_report_photo,
 )
 from app.modules.animals.age_format import format_age_months_ru
 from app.modules.animals.jsonutil import parse_json_list
@@ -56,6 +59,33 @@ _ALLOWED_EXPERIENCE = {x["id"] for x in EXPERIENCE_LEVEL_OPTIONS}
 _HELP_TYPE_LABELS: dict[str, str] = {x["id"]: x["label"] for x in HELP_TYPE_OPTIONS}
 _HELP_TYPE_LABELS.update({x["id"]: x["label"] for x in COMPETENCY_OPTIONS})
 
+MIN_ANIMAL_PHOTOS = 3
+
+
+def _committed_photos(animal) -> list:
+    return [p for p in (animal.photos or []) if not getattr(p, "is_pending", False)]
+
+
+def _pending_photos(animal) -> list:
+    return [p for p in (animal.photos or []) if getattr(p, "is_pending", False)]
+
+
+def _animal_photo_urls(animal, *, pending: bool = False) -> list[str]:
+    if not animal or not animal.photos:
+        return []
+    photos = _pending_photos(animal) if pending else _committed_photos(animal)
+    return [f"{settings.media_url_prefix}/{p.file_path}" for p in photos]
+
+
+def _ensure_public_animal_has_photos(animal: Animal) -> None:
+    if animal.status == AnimalStatus.ARCHIVED.value:
+        return
+    if len(_committed_photos(animal)) < MIN_ANIMAL_PHOTOS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Для публикации карточки нужно минимум {MIN_ANIMAL_PHOTOS} фото",
+        )
+
 
 def _help_request_deadline_label(deadline_at: datetime | None, deadline_note: str | None) -> str | None:
     if deadline_note is not None and deadline_note.strip():
@@ -78,7 +108,10 @@ def _description_snippet(text: str | None, max_len: int = 220) -> str:
 def _primary_photo_url(animal) -> str | None:
     if not animal or not animal.photos:
         return None
-    primary = next((p for p in animal.photos if p.is_primary), None) or animal.photos[0]
+    committed = _committed_photos(animal)
+    if not committed:
+        return None
+    primary = next((p for p in committed if p.is_primary), None) or committed[0]
     return f"{settings.media_url_prefix}/{primary.file_path}"
 
 
@@ -376,6 +409,28 @@ class AccountService:
         self.repo.db.commit()
         self.repo.db.refresh(u)
         return self.get_profile(u)
+
+    def become_volunteer(self, user: User, payload: s.BecomeVolunteerRequest) -> s.MeProfileResponse:
+        u = self.repo.get_user_me(user.id)
+        if u is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        if u.role == UserRole.VOLUNTEER:
+            return self.patch_profile(u, s.MeProfilePatchRequest(volunteer=payload))
+        if u.role != UserRole.USER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Стать волонтёром могут только пользователи с ролью user",
+            )
+        u.role = UserRole.VOLUNTEER
+        if payload.full_name is not None:
+            u.full_name = payload.full_name.strip() or None
+        vp = VolunteerProfile(user_id=u.id, location_city=payload.location_city.strip())
+        self.repo.db.add(vp)
+        self.repo.db.flush()
+        u.volunteer_profile = vp
+        self.repo.db.commit()
+        self.repo.db.refresh(u)
+        return self.patch_profile(u, s.MeProfilePatchRequest(volunteer=payload))
 
     def upload_avatar(self, user: User, file: UploadFile) -> s.AvatarUploadResponse:
         u = self.repo.get_user_me(user.id)
@@ -741,10 +796,19 @@ class AccountService:
         return self._response_detail(row)
 
     def submit_volunteer_response_report(
-        self, user: User, response_id: int, payload: s.VolunteerReportCreate
+        self,
+        user: User,
+        response_id: int,
+        content: str,
+        files: list[UploadFile],
     ) -> s.VolunteerResponseDetail:
         if user.role != UserRole.VOLUNTEER:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        if len(files) < 3:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="К отчёту нужно приложить минимум 3 фото",
+            )
         row = self.repo.get_volunteer_response(response_id, user.id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отклик не найден")
@@ -758,18 +822,28 @@ class AccountService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отчёт уже принят организацией")
         now = datetime.utcnow()
         if rep is None:
-            self.repo.db.add(
-                VolunteerHelpResponseReport(
-                    volunteer_help_response_id=row.id,
-                    body=payload.content,
-                    submitted_at=now,
-                )
+            rep = VolunteerHelpResponseReport(
+                volunteer_help_response_id=row.id,
+                body=content,
+                submitted_at=now,
             )
+            self.repo.db.add(rep)
+            self.repo.db.flush()
         else:
-            rep.body = payload.content
+            rep.body = content
             rep.submitted_at = now
             if rep.org_rejection_reason is not None:
                 rep.org_rejection_reason = None
+            for photo in list(rep.photos or []):
+                self.repo.db.delete(photo)
+        for idx, file in enumerate(files):
+            try:
+                path = save_volunteer_report_photo(settings.media_dir, row.id, file)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            self.repo.db.add(
+                VolunteerHelpResponseReportPhoto(report_id=rep.id, file_path=path, sort_order=idx)
+            )
         row.updated_at = now
         self.repo.db.commit()
         self.repo.db.refresh(row)
@@ -796,6 +870,10 @@ class AccountService:
             id=rep.id,
             volunteer_help_response_id=rep.volunteer_help_response_id,
             content=rep.body,
+            photo_urls=[
+                self._media_url(p.file_path) or ""
+                for p in sorted(rep.photos or [], key=lambda x: (x.sort_order, x.id))
+            ],
             submitted_at=rep.submitted_at,
             org_accepted_at=rep.org_accepted_at,
             org_rejection_reason=rep.org_rejection_reason,
@@ -826,6 +904,8 @@ class AccountService:
                 city=org.city,
                 logo_url=self._media_url(org.logo_path),
                 cover_url=self._media_url(org.cover_path),
+                logo_pending_url=self._media_url(getattr(org, "logo_pending_path", None)),
+                cover_pending_url=self._media_url(getattr(org, "cover_pending_path", None)),
             ),
             contacts=s.OrgCabinetContactsOut(
                 phone=org.phone,
@@ -915,8 +995,26 @@ class AccountService:
                 changed = True
         if not changed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self._apply_org_pending_media(org)
         self.repo.db.commit()
         return self.get_org_cabinet_profile(user)
+
+    @staticmethod
+    def _apply_org_pending_media(org) -> None:
+        if getattr(org, "logo_pending_path", None):
+            org.logo_path = org.logo_pending_path
+            org.logo_pending_path = None
+        if getattr(org, "cover_pending_path", None):
+            org.cover_path = org.cover_pending_path
+            org.cover_pending_path = None
+
+    @staticmethod
+    def _clear_org_logo_pending(org) -> None:
+        org.logo_pending_path = None
+
+    @staticmethod
+    def _clear_org_cover_pending(org) -> None:
+        org.cover_pending_path = None
 
     def upload_org_logo(self, user: User, file: UploadFile) -> s.OrgAssetUploadResponse:
         org = self._organization_for_user(user)
@@ -924,7 +1022,7 @@ class AccountService:
             path = save_org_asset(settings.media_dir, org.id, "logo", file, max_size_bytes=2 * 1024 * 1024)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        org.logo_path = path
+        org.logo_pending_path = path
         self.repo.db.commit()
         return s.OrgAssetUploadResponse(url=self._media_url(path) or "")
 
@@ -934,9 +1032,33 @@ class AccountService:
             path = save_org_asset(settings.media_dir, org.id, "cover", file, max_size_bytes=5 * 1024 * 1024)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        org.cover_path = path
+        org.cover_pending_path = path
         self.repo.db.commit()
         return s.OrgAssetUploadResponse(url=self._media_url(path) or "")
+
+    def discard_org_logo_pending(self, user: User) -> s.OrgCabinetProfileResponse:
+        org = self._organization_for_user(user)
+        self._clear_org_logo_pending(org)
+        self.repo.db.commit()
+        return self.get_org_cabinet_profile(user)
+
+    def discard_org_cover_pending(self, user: User) -> s.OrgCabinetProfileResponse:
+        org = self._organization_for_user(user)
+        self._clear_org_cover_pending(org)
+        self.repo.db.commit()
+        return self.get_org_cabinet_profile(user)
+
+    def discard_org_animal_pending_photos(self, user: User, animal_id: int) -> s.OrgOwnedAnimalItem:
+        org = self._organization_for_user(user)
+        a = self.repo.get_org_animal(org.id, animal_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
+        self.repo.discard_pending_animal_photos(animal_id)
+        self.repo.db.commit()
+        a = self.repo.get_org_animal(org.id, animal_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
+        return self._org_owned_animal_item(a)
 
     def upload_org_gallery_image(
         self,
@@ -1029,6 +1151,8 @@ class AccountService:
             health_checklist=self._catalog_labels(a, "health_care"),
             character_tags=self._catalog_labels(a, "character"),
             primary_photo_url=_primary_photo_url(a),
+            photo_urls=_animal_photo_urls(a),
+            pending_photo_urls=_animal_photo_urls(a, pending=True),
             created_at=a.created_at,
         )
 
@@ -1109,6 +1233,11 @@ class AccountService:
             changed = True
         if not changed:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        self.repo.promote_pending_animal_photos(int(a.id))
+        self.repo.db.flush()
+        a = self.repo.get_org_animal(org.id, animal_id) or a
+        if payload.status is not None and payload.status != AnimalStatus.ARCHIVED.value:
+            _ensure_public_animal_has_photos(a)
         self.repo.db.commit()
         a = self.repo.get_org_animal(org.id, animal_id)
         if a is None:
@@ -1277,6 +1406,20 @@ class AccountService:
         if hr is not None:
             hr.status = "closed"
             hr.updated_at = now
+        self._sync_volunteer_completed_tasks_count(response.volunteer_user_id)
+
+    def _sync_volunteer_completed_tasks_count(self, volunteer_user_id: int) -> None:
+        count = (
+            self.repo.db.query(VolunteerHelpResponse.id)
+            .filter(
+                VolunteerHelpResponse.volunteer_user_id == volunteer_user_id,
+                VolunteerHelpResponse.status == VolunteerHelpResponseStatus.COMPLETED.value,
+            )
+            .count()
+        )
+        user = self.repo.get_user_me(volunteer_user_id)
+        if user and user.volunteer_profile is not None:
+            user.volunteer_profile.completed_tasks_count = int(count or 0)
 
     def _on_volunteer_response_accepted(self, accepted: VolunteerHelpResponse) -> None:
         now = datetime.utcnow()
@@ -1901,13 +2044,14 @@ class AccountService:
         )
 
     @staticmethod
-    def _org_report_item(r: OrganizationReport) -> s.OrgReportItem:
+    def _org_report_item(r: OrganizationReport, media_url_fn) -> s.OrgReportItem:
         return s.OrgReportItem(
             id=r.id,
             title=r.title,
             summary=r.summary,
             body=r.body,
             detail_url=r.detail_url,
+            file_url=media_url_fn(getattr(r, "file_path", None)),
             published_at=r.published_at,
             is_published=bool(r.is_published),
         )
@@ -1915,7 +2059,7 @@ class AccountService:
     def list_org_reports(self, user: User, limit: int, offset: int) -> s.OrgReportListResponse:
         org = self._organization_for_user(user)
         total, rows = self.repo.list_org_reports(org.id, limit, offset)
-        return s.OrgReportListResponse(total=total, items=[self._org_report_item(r) for r in rows])
+        return s.OrgReportListResponse(total=total, items=[self._org_report_item(r, self._media_url) for r in rows])
 
     def create_org_report(self, user: User, payload: s.OrgReportCreate) -> s.OrgReportItem:
         org = self._organization_for_user(user)
@@ -1931,7 +2075,21 @@ class AccountService:
         self.repo.db.add(row)
         self.repo.db.commit()
         self.repo.db.refresh(row)
-        return self._org_report_item(row)
+        return self._org_report_item(row, self._media_url)
+
+    def upload_org_report_file(self, user: User, report_id: int, file: UploadFile) -> s.OrgReportItem:
+        org = self._organization_for_user(user)
+        row = self.repo.get_org_report(org.id, report_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отчёт не найден")
+        try:
+            path = save_org_report_file(settings.media_dir, org.id, report_id, file)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        row.file_path = path
+        self.repo.db.commit()
+        self.repo.db.refresh(row)
+        return self._org_report_item(row, self._media_url)
 
     def update_org_report(self, user: User, report_id: int, payload: s.OrgReportUpdate) -> s.OrgReportItem:
         org = self._organization_for_user(user)
@@ -1948,7 +2106,7 @@ class AccountService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
         self.repo.db.commit()
         self.repo.db.refresh(row)
-        return self._org_report_item(row)
+        return self._org_report_item(row, self._media_url)
 
     def delete_org_report(self, user: User, report_id: int) -> None:
         org = self._organization_for_user(user)

@@ -108,6 +108,11 @@ class MeProfilePatchRequest(BaseModel):
     organization_contact: OrgSelfPatch | None = None
 
 
+class BecomeVolunteerRequest(VolunteerSelfPatch):
+    competency_slugs: list[str] = Field(min_length=1, description="Обязательные навыки волонтёра")
+    location_city: str = Field(min_length=1, max_length=120, description="Город проживания")
+
+
 class AdoptionApplicationCreate(AdoptionApplicationFormBody):
     animal_id: int
 
@@ -203,6 +208,7 @@ class VolunteerReportOut(BaseModel):
     id: int
     volunteer_help_response_id: int
     content: str
+    photo_urls: list[str] = Field(default_factory=list)
     submitted_at: datetime
     org_accepted_at: datetime | None = None
     org_rejection_reason: str | None = None
@@ -316,6 +322,8 @@ class OrgCabinetProfileOut(BaseModel):
     city: str | None = None
     logo_url: str | None = None
     cover_url: str | None = None
+    logo_pending_url: str | None = None
+    cover_pending_url: str | None = None
 
 
 class OrgCabinetContactsOut(BaseModel):
@@ -458,6 +466,8 @@ class OrgOwnedAnimalItem(BaseModel):
     health_checklist: list[str] = Field(default_factory=list)
     character_tags: list[str] = Field(default_factory=list)
     primary_photo_url: str | None = None
+    photo_urls: list[str] = Field(default_factory=list)
+    pending_photo_urls: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -532,6 +542,7 @@ class OrgReportItem(BaseModel):
     summary: str | None = None
     body: str | None = None
     detail_url: str | None = None
+    file_url: str | None = None
     published_at: datetime
     is_published: bool
 

@@ -11,6 +11,8 @@ _VOLUNTEER_TASK_HELP_TYPES = frozenset(x["id"] for x in COMPETENCY_OPTIONS)
 def help_bucket_for_request(hr: HelpRequest) -> str | None:
     if not hr.is_published or hr.is_archived:
         return None
+    if (hr.status or "").strip().lower() == "closed":
+        return None
     if hr.animal_id is None:
         return None
 

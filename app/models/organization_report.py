@@ -17,6 +17,7 @@ class OrganizationReport(Base):
     summary: Mapped[str | None] = mapped_column(String(600), nullable=True)
     detail_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     published_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 

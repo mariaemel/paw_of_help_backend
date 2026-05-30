@@ -33,6 +33,8 @@ class Organization(Base):
     social_links_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     logo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    logo_pending_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cover_pending_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     admission_rules: Mapped[str | None] = mapped_column(Text, nullable=True)
     adoption_howto: Mapped[str | None] = mapped_column(Text, nullable=True)
     verified_organization: Mapped[bool] = mapped_column(Boolean, default=False)

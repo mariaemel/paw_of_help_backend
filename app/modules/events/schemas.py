@@ -27,6 +27,15 @@ class EventListItem(BaseModel):
     help_type: str | None = None
     starts_at: datetime
     ends_at: datetime | None = None
+    entry_type: str = "free"
+    capacity: int | None = None
+    seats_taken: int = 0
+    seats_available: int | None = None
+    is_full: bool = False
+    registration_action: str = Field(
+        default="details",
+        description="details — свободный вход; signup — запись; full — мест нет",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,6 +54,12 @@ class EventDetail(BaseModel):
     ends_at: datetime | None = None
     latitude: float | None = None
     longitude: float | None = None
+    entry_type: str = "free"
+    capacity: int | None = None
+    seats_taken: int = 0
+    seats_available: int | None = None
+    is_full: bool = False
+    registration_action: str = "details"
 
 
 class EventListResponse(BaseModel):
@@ -87,6 +102,8 @@ class EventCreateRequest(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     is_published: bool = True
+    entry_type: str = Field(default="free", description="free | limited")
+    capacity: int | None = Field(default=None, ge=1, le=100000)
 
 
 class EventUpdateRequest(BaseModel):
@@ -102,3 +119,13 @@ class EventUpdateRequest(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     is_published: bool | None = None
+    entry_type: str | None = Field(default=None, description="free | limited")
+    capacity: int | None = Field(default=None, ge=1, le=100000)
+
+
+class EventRegistrationResponse(BaseModel):
+    event_id: int
+    seats_taken: int
+    seats_available: int | None = None
+    is_full: bool
+    registration_action: str

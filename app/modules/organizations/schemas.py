@@ -127,6 +127,7 @@ class OrgPublicReport(BaseModel):
     title: str
     published_at: datetime
     summary: str | None = None
+    file_url: str | None = None
 
 
 class OrgPublicArticle(BaseModel):

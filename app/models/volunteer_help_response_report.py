@@ -10,6 +10,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.volunteer_help_response import VolunteerHelpResponse
+    from app.models.volunteer_help_response_report_photo import VolunteerHelpResponseReportPhoto
 
 
 class VolunteerHelpResponseReport(Base):
@@ -27,3 +28,8 @@ class VolunteerHelpResponseReport(Base):
     org_rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     response: Mapped["VolunteerHelpResponse"] = relationship("VolunteerHelpResponse", back_populates="report")
+    photos: Mapped[list["VolunteerHelpResponseReportPhoto"]] = relationship(
+        "VolunteerHelpResponseReportPhoto",
+        back_populates="report",
+        cascade="all, delete-orphan",
+    )

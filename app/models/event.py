@@ -26,4 +26,7 @@ class Event(Base):
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    entry_type: Mapped[str] = mapped_column(String(20), default="free", index=True)
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seats_taken: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

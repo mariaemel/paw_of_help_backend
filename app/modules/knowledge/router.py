@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,7 @@ from app.modules.knowledge.schemas import (
     KnowledgeCatalogsResponse,
     KnowledgeDetail,
     KnowledgeFilterParams,
+    KnowledgeHintsResponse,
     KnowledgeListResponse,
     KnowledgeMineListResponse,
     KnowledgeUpdateRequest,
@@ -54,12 +57,39 @@ def knowledge_catalogs(service: KnowledgeService = Depends(get_knowledge_service
 
 @router.get("/mine", response_model=KnowledgeMineListResponse)
 def list_my_articles(
+    tab: Literal["all", "active", "archive"] = Query(
+        default="all",
+        description="all — все статьи; active — без архива; archive — только архив",
+    ),
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(_kb_writers),
     service: KnowledgeService = Depends(get_knowledge_service),
 ):
-    return service.list_my_articles(user, limit=limit, offset=offset)
+    return service.list_my_articles(user, limit=limit, offset=offset, tab=tab)
+
+
+@router.get("/hints", response_model=KnowledgeHintsResponse)
+def list_context_hints(
+    help_type: str | None = Query(default=None),
+    animal_species: str | None = Query(default=None),
+    competency_slugs: str | None = Query(default=None, description="Через запятую"),
+    keywords: str | None = Query(default=None, description="Через запятую"),
+    limit: int = Query(default=3, ge=1, le=10),
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    from app.modules.knowledge.schemas import KnowledgeHintRequestParams
+
+    comp = [x.strip() for x in (competency_slugs or "").split(",") if x.strip()]
+    kw = [x.strip() for x in (keywords or "").split(",") if x.strip()]
+    params = KnowledgeHintRequestParams(
+        help_type=help_type,
+        animal_species=animal_species,
+        competency_slugs=comp,
+        keywords=kw,
+        limit=limit,
+    )
+    return service.list_context_hints(params)
 
 
 @router.get("/{article_id}", response_model=KnowledgeDetail)

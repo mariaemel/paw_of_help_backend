@@ -86,3 +86,32 @@ def upload_animal_image(
     service: AnimalService = Depends(get_animal_service),
 ):
     return service.upload_image(animal_id=animal_id, file=file, is_primary=is_primary, user=user)
+
+
+@router.delete("/{animal_id}/images/{photo_id}", status_code=204)
+def delete_animal_image(
+    animal_id: int,
+    photo_id: int,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
+    service: AnimalService = Depends(get_animal_service),
+):
+    service.delete_image(animal_id, photo_id, user)
+
+
+@router.delete("/{animal_id}/images/pending", status_code=204)
+def discard_animal_pending_images(
+    animal_id: int,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
+    service: AnimalService = Depends(get_animal_service),
+):
+    service.discard_pending_images(animal_id, user)
+
+
+@router.patch("/{animal_id}/images/{photo_id}/primary", response_model=AnimalPhotoUploadResponse)
+def set_animal_primary_image(
+    animal_id: int,
+    photo_id: int,
+    user: User = Depends(require_roles(UserRole.ORGANIZATION)),
+    service: AnimalService = Depends(get_animal_service),
+):
+    return service.set_primary_image(animal_id, photo_id, user)

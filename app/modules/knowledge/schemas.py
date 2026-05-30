@@ -81,6 +81,31 @@ class KnowledgeFilterParams(BaseModel):
     sort_by: str = Field(default="-created_at")
 
 
+class KnowledgeHintRequestParams(BaseModel):
+    help_type: str | None = None
+    animal_species: str | None = None
+    competency_slugs: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    limit: int = Field(default=3, ge=1, le=10)
+
+
+class KnowledgeHintItem(BaseModel):
+    id: int
+    title: str
+    summary: str | None = None
+    cover_url: str | None = None
+    category: str
+    category_label: str | None = None
+    read_minutes: int
+    match_score: float
+    match_reasons: list[str] = Field(default_factory=list)
+
+
+class KnowledgeHintsResponse(BaseModel):
+    total: int
+    items: list[KnowledgeHintItem]
+
+
 class KnowledgeUpsertRequest(BaseModel):
     title: str = Field(min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)

@@ -156,3 +156,57 @@ class VolunteerDetail(BaseModel):
     travel_radius_km: int | None = Field(
         default=None, description="Радиус путешествий волонтёра в километрах"
     )
+
+
+class VolunteerTaskFeedItem(BaseModel):
+    id: int
+    title: str
+    description: str
+    city: str | None = None
+    organization_id: int
+    organization_name: str
+    animal_id: int | None = None
+    animal_name: str | None = None
+    animal_species: str | None = None
+    help_type: str
+    is_urgent: bool
+    volunteer_needed: bool
+    deadline_at: datetime | None = None
+    deadline_note: str | None = None
+    deadline_label: str | None = None
+    status: str
+    target_amount: float | None = None
+    primary_photo_url: str | None = None
+    animal_photo_url: str | None = None
+    badges: list[str] = Field(default_factory=list)
+    match_score: float
+    match_reasons: list[str] = Field(default_factory=list)
+    match_reason_labels: list[str] = Field(default_factory=list)
+    distance_km: float | None = None
+    required_competencies: list[str] = Field(default_factory=list)
+
+
+class VolunteerTaskFeedResponse(BaseModel):
+    total: int
+    items: list[VolunteerTaskFeedItem]
+    is_available: bool = True
+    completed_tasks_count: int = 0
+    message: str | None = None
+
+
+class VolunteerCompletedTaskItem(BaseModel):
+    response_id: int
+    completed_at: datetime
+    help_request_id: int
+    title: str
+    organization_id: int | None = None
+    organization_name: str | None = None
+    help_type: str
+    city: str | None = None
+    is_urgent: bool = False
+
+
+class VolunteerCompletedTasksResponse(BaseModel):
+    total: int
+    completed_tasks_count: int
+    items: list[VolunteerCompletedTaskItem]
