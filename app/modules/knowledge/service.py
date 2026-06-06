@@ -3,6 +3,9 @@ import re
 
 from fastapi import HTTPException, status
 
+from app.core.cache import cached_model, get_json, is_enabled, set_json
+from app.core.cache_keys import KNOWLEDGE_CATALOGS, knowledge_article_key
+from app.core.cache_invalidation import invalidate_knowledge_article
 from app.core.config import settings
 from app.models.knowledge import KnowledgeArticle
 from app.models.user import User, UserRole
@@ -94,15 +97,30 @@ class KnowledgeService:
         return KnowledgeListResponse(total=total, items=items)
 
     def get_catalogs(self) -> KnowledgeCatalogsResponse:
-        return KnowledgeCatalogsResponse(
-            categories=[CatalogOption(**x) for x in KB_CATEGORY_OPTIONS] + [CatalogOption(id="all", label="Все")],
-            tip_scope_options=[
-                CatalogOption(id="all", label="Все материалы"),
-                CatalogOption(id="tips", label="Только контекстные подсказки"),
-            ],
+        def _load() -> KnowledgeCatalogsResponse:
+            return KnowledgeCatalogsResponse(
+                categories=[CatalogOption(**x) for x in KB_CATEGORY_OPTIONS]
+                + [CatalogOption(id="all", label="Все")],
+                tip_scope_options=[
+                    CatalogOption(id="all", label="Все материалы"),
+                    CatalogOption(id="tips", label="Только контекстные подсказки"),
+                ],
+            )
+
+        return cached_model(
+            KNOWLEDGE_CATALOGS,
+            settings.cache_ttl_static_catalogs,
+            KnowledgeCatalogsResponse,
+            _load,
         )
 
     def get_detail(self, article_id: int, viewer: User | None = None) -> KnowledgeDetail:
+        cache_key = knowledge_article_key(article_id)
+        if is_enabled() and viewer is None:
+            raw = get_json(cache_key)
+            if raw is not None:
+                return KnowledgeDetail.model_validate(raw)
+
         row = self.repo.get_article(article_id)
         if not row:
             row = self.repo.get_article_for_owner(article_id)
@@ -110,7 +128,16 @@ class KnowledgeService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
         if viewer is not None and (not row.is_published or row.is_archived):
             self._ensure_can_edit(row, viewer)
-        return self._to_detail(row, viewer)
+
+        detail = self._to_detail(row, viewer)
+        if (
+            is_enabled()
+            and row.is_published
+            and not row.is_archived
+            and not self.can_edit_article(row, viewer)
+        ):
+            set_json(cache_key, detail.model_dump(mode="json"), settings.cache_ttl_knowledge_article)
+        return detail
 
     def list_my_articles(
         self, user: User, limit: int = 100, offset: int = 0, tab: str = "all"
@@ -197,6 +224,8 @@ class KnowledgeService:
         )
         self.repo.db.add(art)
         self.repo.db.commit()
+        if art.is_published:
+            invalidate_knowledge_article(int(art.id))
         return self.get_detail(art.id, user)
 
     def update_article(self, article_id: int, user: User, payload: KnowledgeUpdateRequest) -> KnowledgeDetail:
@@ -221,6 +250,7 @@ class KnowledgeService:
             art.read_minutes = self._estimate_read_minutes(payload.content)
 
         self.repo.db.commit()
+        invalidate_knowledge_article(article_id)
         return self.get_detail(art.id, user)
 
     def delete_article(self, article_id: int, user: User) -> None:
@@ -231,6 +261,7 @@ class KnowledgeService:
         self._ensure_can_edit(art, user)
         self.repo.db.delete(art)
         self.repo.db.commit()
+        invalidate_knowledge_article(article_id)
 
     def archive_article(self, article_id: int, user: User) -> KnowledgeDetail:
         self._ensure_writer(user)
@@ -240,4 +271,5 @@ class KnowledgeService:
         self._ensure_can_edit(art, user)
         art.is_archived = True
         self.repo.db.commit()
+        invalidate_knowledge_article(article_id)
         return self.get_detail(art.id, user)

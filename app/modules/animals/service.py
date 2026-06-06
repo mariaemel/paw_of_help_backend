@@ -1,5 +1,7 @@
 from fastapi import HTTPException, status
 
+from app.core.cache import cached_model
+from app.core.cache_keys import ANIMALS_CATALOGS, animals_list_key
 from app.core.config import settings
 from app.models.organization import Organization
 from app.models.user import User, UserRole
@@ -61,28 +63,41 @@ class AnimalService:
         }
 
     def get_catalog(self, filters: AnimalFilterParams) -> AnimalListResponse:
-        total, items = self.repo.list_animals(filters)
-        response_items = [self._item_dict(a) for a in items]
-        return AnimalListResponse(total=total, items=response_items)
+        key = animals_list_key(filters)
+
+        def _load() -> AnimalListResponse:
+            total, items = self.repo.list_animals(filters)
+            response_items = [self._item_dict(a) for a in items]
+            return AnimalListResponse(total=total, items=response_items)
+
+        return cached_model(key, settings.cache_ttl_animals_list, AnimalListResponse, _load)
 
     def get_filters_catalogs(self) -> AnimalCatalogsResponse:
-        statuses, sexes, cities = self.repo.get_catalogs()
-        org_opts = self.repo.list_organization_options()
-        age_groups = [AgeGroupOption(**g) for g in AGE_GROUPS]
-        features = build_catalog_feature_filter_options(self.repo)
-        health_rows = self.repo.list_catalog_options("health_care")
-        character_rows = self.repo.list_catalog_options("character")
-        return AnimalCatalogsResponse(
-            statuses=statuses,
-            sexes=sexes,
-            cities=cities,
-            urgent_options=[True, False],
-            species=list(SPECIES_LABELS.keys()),
-            age_groups=age_groups,
-            features=features,
-            health_care_tags=[CatalogTagOption(id=s, label=l) for s, l in health_rows],
-            character_tags=[CatalogTagOption(id=s, label=l) for s, l in character_rows],
-            organizations=[OrganizationOption(id=o[0], name=o[1]) for o in org_opts],
+        def _load() -> AnimalCatalogsResponse:
+            statuses, sexes, cities = self.repo.get_catalogs()
+            org_opts = self.repo.list_organization_options()
+            age_groups = [AgeGroupOption(**g) for g in AGE_GROUPS]
+            features = build_catalog_feature_filter_options(self.repo)
+            health_rows = self.repo.list_catalog_options("health_care")
+            character_rows = self.repo.list_catalog_options("character")
+            return AnimalCatalogsResponse(
+                statuses=statuses,
+                sexes=sexes,
+                cities=cities,
+                urgent_options=[True, False],
+                species=list(SPECIES_LABELS.keys()),
+                age_groups=age_groups,
+                features=features,
+                health_care_tags=[CatalogTagOption(id=s, label=l) for s, l in health_rows],
+                character_tags=[CatalogTagOption(id=s, label=l) for s, l in character_rows],
+                organizations=[OrganizationOption(id=o[0], name=o[1]) for o in org_opts],
+            )
+
+        return cached_model(
+            ANIMALS_CATALOGS,
+            settings.cache_ttl_animals_catalogs,
+            AnimalCatalogsResponse,
+            _load,
         )
 
     def get_card(self, animal_id: int) -> AnimalDetail:

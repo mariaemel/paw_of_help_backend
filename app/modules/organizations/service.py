@@ -4,6 +4,8 @@ from html import unescape
 
 from fastapi import HTTPException, status
 
+from app.core.cache import cached_model
+from app.core.cache_keys import ORGANIZATIONS_CATALOGS, organization_public_key
 from app.core.config import settings
 from app.modules.animals.tags import species_label_ru
 from app.modules.organizations.public_catalog import DEFAULT_HELP_SECTIONS, WARD_STATUS_PUBLIC_LABELS
@@ -193,14 +195,33 @@ class OrganizationService:
         return OrganizationListResponse(total=total, items=out)
 
     def get_catalogs(self) -> OrganizationCatalogsResponse:
-        cities, specs, needs_opts = self.repo.list_organization_catalogs()
-        return OrganizationCatalogsResponse(
-            cities=cities,
-            specializations=specs,
-            needs_options=needs_opts,
+        def _load() -> OrganizationCatalogsResponse:
+            cities, specs, needs_opts = self.repo.list_organization_catalogs()
+            return OrganizationCatalogsResponse(
+                cities=cities,
+                specializations=specs,
+                needs_options=needs_opts,
+            )
+
+        return cached_model(
+            ORGANIZATIONS_CATALOGS,
+            settings.cache_ttl_static_catalogs,
+            OrganizationCatalogsResponse,
+            _load,
         )
 
     def get_public_page(self, organization_id: int) -> OrganizationPublicPage:
+        def _load() -> OrganizationPublicPage:
+            return self._build_public_page(organization_id)
+
+        return cached_model(
+            organization_public_key(organization_id),
+            settings.cache_ttl_org_public,
+            OrganizationPublicPage,
+            _load,
+        )
+
+    def _build_public_page(self, organization_id: int) -> OrganizationPublicPage:
         org = self.repo.get_by_id(organization_id)
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")

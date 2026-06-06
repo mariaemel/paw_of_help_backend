@@ -813,6 +813,18 @@ class AccountRepository:
             synchronize_session=False,
         )
 
+    def get_organization_owner_user_id(self, organization_id: int) -> int | None:
+        from app.models.organization import Organization
+
+        row = (
+            self.db.query(Organization.owner_user_id)
+            .filter(Organization.id == organization_id)
+            .first()
+        )
+        if row is None:
+            return None
+        return row[0]
+
     def list_org_reports(self, organization_id: int, limit: int, offset: int) -> tuple[int, list[OrganizationReport]]:
         query = self.db.query(OrganizationReport).filter(OrganizationReport.organization_id == organization_id)
         total = int(query.count() or 0)

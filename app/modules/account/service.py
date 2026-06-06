@@ -4,11 +4,16 @@ from datetime import datetime
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 
+from app.core.cache_invalidation import (
+    invalidate_animals_cache,
+    invalidate_organization_public,
+)
 from app.core.config import settings
 from app.models.adoption_application import AdoptionApplicationStatus, AnimalAdoptionApplication
 from app.models.animal import Animal, AnimalStatus
 from app.models.help_request import HelpRequest
-from app.models.org_chat import OrgChatDialog
+from app.models.org_chat import OrgChatDialog, OrgChatMessage
+from app.modules.communications.runtime import get_comms_notifier
 from app.models.organization_home_story import OrganizationHomeStory
 from app.models.organization_report import OrganizationReport
 from app.models.profile import UserProfile, VolunteerProfile
@@ -997,6 +1002,7 @@ class AccountService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
         self._apply_org_pending_media(org)
         self.repo.db.commit()
+        invalidate_organization_public(org.id)
         return self.get_org_cabinet_profile(user)
 
     @staticmethod
@@ -1191,6 +1197,8 @@ class AccountService:
         a = self.repo.get_org_animal(org.id, int(a.id))
         if a is None:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Питомец не найден")
+        invalidate_animals_cache()
+        invalidate_organization_public(org.id)
         return self._org_owned_animal_item(a)
 
     def update_org_animal(self, user: User, animal_id: int, payload: s.OrgOwnedAnimalUpdate) -> s.OrgOwnedAnimalItem:
@@ -1242,6 +1250,8 @@ class AccountService:
         a = self.repo.get_org_animal(org.id, animal_id)
         if a is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Питомец не найден")
+        invalidate_animals_cache()
+        invalidate_organization_public(org.id)
         return self._org_owned_animal_item(a)
 
     def archive_org_animal(self, user: User, animal_id: int) -> s.OrgOwnedAnimalItem:
@@ -1252,6 +1262,8 @@ class AccountService:
         a.status = "archived"
         self.repo.db.commit()
         self.repo.db.refresh(a)
+        invalidate_animals_cache()
+        invalidate_organization_public(org.id)
         return self._org_owned_animal_item(a)
 
     @staticmethod
@@ -1642,6 +1654,15 @@ class AccountService:
             messages=out_messages,
         )
 
+    def _push_comms_message_ws(self, dialog: OrgChatDialog, msg: OrgChatMessage) -> None:
+        self.repo.db.refresh(dialog)
+        get_comms_notifier().notify_new_message(
+            dialog=dialog,
+            msg=msg,
+            repo=self.repo,
+            media_url_fn=self._media_url,
+        )
+
     @staticmethod
     def _comms_preview_text(body_plain: str, has_photo: bool) -> str:
         t = (body_plain or "").strip()
@@ -1707,6 +1728,7 @@ class AccountService:
         self._increment_participant_unread_after_org_message(dialog)
         self.repo.db.commit()
         self.repo.db.refresh(msg)
+        self._push_comms_message_ws(dialog, msg)
         return s.OrgCommsMessageItem(
             id=msg.id,
             sender_user_id=msg.sender_user_id,
@@ -1914,6 +1936,7 @@ class AccountService:
         self.repo.increment_dialog_unread_for_org(dialog.id)
         self.repo.db.commit()
         self.repo.db.refresh(msg)
+        self._push_comms_message_ws(dialog, msg)
         return s.OrgCommsMessageItem(
             id=msg.id,
             sender_user_id=msg.sender_user_id,
@@ -2033,6 +2056,7 @@ class AccountService:
         self.repo.increment_dialog_unread_for_org(dialog.id)
         self.repo.db.commit()
         self.repo.db.refresh(msg)
+        self._push_comms_message_ws(dialog, msg)
         return s.OrgCommsMessageItem(
             id=msg.id,
             sender_user_id=msg.sender_user_id,

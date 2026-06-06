@@ -1,5 +1,8 @@
 from fastapi import HTTPException, status
 
+from app.core.cache import cached_model
+from app.core.cache_keys import EVENTS_CATALOGS
+from app.core.config import settings
 from app.models.event import Event
 from app.models.organization import Organization
 from app.models.user import User, UserRole
@@ -70,14 +73,22 @@ class EventService:
         return EventListResponse(total=total, items=items)
 
     def get_catalogs(self) -> EventCatalogsResponse:
-        return EventCatalogsResponse(
-            cities=self.repo.list_catalogs(),
-            formats=[
-                CatalogOption(id="online", label="Онлайн"),
-                CatalogOption(id="offline", label="Офлайн"),
-                CatalogOption(id="all", label="Все"),
-            ],
-            help_types=[CatalogOption(**x) for x in EVENT_HELP_OPTIONS],
+        def _load() -> EventCatalogsResponse:
+            return EventCatalogsResponse(
+                cities=self.repo.list_catalogs(),
+                formats=[
+                    CatalogOption(id="online", label="Онлайн"),
+                    CatalogOption(id="offline", label="Офлайн"),
+                    CatalogOption(id="all", label="Все"),
+                ],
+                help_types=[CatalogOption(**x) for x in EVENT_HELP_OPTIONS],
+            )
+
+        return cached_model(
+            EVENTS_CATALOGS,
+            settings.cache_ttl_static_catalogs,
+            EventCatalogsResponse,
+            _load,
         )
 
     def get_detail(self, event_id: int) -> EventDetail:

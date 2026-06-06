@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     seed_demo_data: bool = True
     verification_token_expire_hours: int = 24
+    redis_url: str | None = None
+    cache_ttl_animals_catalogs: int = 1200
+    cache_ttl_static_catalogs: int = 2700
+    cache_ttl_knowledge_article: int = 600
+    cache_ttl_org_public: int = 180
+    cache_ttl_animals_list: int = 45
 
 
 settings = Settings()

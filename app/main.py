@@ -17,6 +17,8 @@ from app.modules.organizations.router import router as organizations_router
 from app.modules.urgent.router import router as urgent_router
 from app.modules.volunteers.router import router as volunteers_router
 from app.modules.help.router import router as help_router
+from app.modules.communications.runtime import shutdown_communications, startup_communications
+from app.modules.communications.ws_router import router as communications_ws_router
 
 from app import models
 
@@ -55,6 +57,16 @@ def on_startup() -> None:
             db.close()
 
 
+@app.on_event("startup")
+async def on_startup_communications() -> None:
+    await startup_communications()
+
+
+@app.on_event("shutdown")
+async def on_shutdown_communications() -> None:
+    await shutdown_communications()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -69,4 +81,5 @@ app.include_router(knowledge_router, prefix=settings.api_prefix)
 app.include_router(events_router, prefix=settings.api_prefix)
 app.include_router(urgent_router, prefix=settings.api_prefix)
 app.include_router(help_router, prefix=settings.api_prefix)
+app.include_router(communications_ws_router, prefix=settings.api_prefix)
 app.mount(settings.media_url_prefix, StaticFiles(directory=settings.media_dir), name="media")
