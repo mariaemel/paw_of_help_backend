@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.geo import filter_sort_paginate_nearby
 from app.core.list_query import apply_city_filter, apply_text_search, geo_bbox_clauses
 from app.models.event import Event
+from app.models.event_registration import EventRegistration
 from app.models.organization import Organization
 from app.modules.events.schemas import EventFilterParams
 
@@ -89,3 +90,26 @@ class EventRepository:
 
         rows = q.offset(filters.offset).limit(filters.limit).all()
         return total, rows
+
+    def is_user_registered(self, user_id: int, event_id: int) -> bool:
+        return (
+            self.db.query(EventRegistration.id)
+            .filter(EventRegistration.user_id == user_id, EventRegistration.event_id == event_id)
+            .first()
+            is not None
+        )
+
+    def list_user_registered_event_ids(self, user_id: int, event_ids: list[int]) -> set[int]:
+        if not event_ids:
+            return set()
+        rows = (
+            self.db.query(EventRegistration.event_id)
+            .filter(EventRegistration.user_id == user_id, EventRegistration.event_id.in_(event_ids))
+            .all()
+        )
+        return {row[0] for row in rows}
+
+    def create_registration(self, user_id: int, event_id: int) -> EventRegistration:
+        registration = EventRegistration(user_id=user_id, event_id=event_id)
+        self.db.add(registration)
+        return registration

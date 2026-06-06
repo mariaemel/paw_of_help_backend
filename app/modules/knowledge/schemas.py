@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 KB_CATEGORY_OPTIONS: list[dict[str, str]] = [
@@ -86,6 +86,7 @@ class KnowledgeHintRequestParams(BaseModel):
     animal_species: str | None = None
     competency_slugs: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
+    task_text: str | None = Field(default=None, description="Заголовок и описание задачи для контекста")
     limit: int = Field(default=3, ge=1, le=10)
 
 
@@ -106,6 +107,12 @@ class KnowledgeHintsResponse(BaseModel):
     items: list[KnowledgeHintItem]
 
 
+def _reject_all_category(value: str) -> str:
+    if value.strip().lower() == "all":
+        raise ValueError("category 'all' is only for list filters, not article type")
+    return value
+
+
 class KnowledgeUpsertRequest(BaseModel):
     title: str = Field(min_length=3, max_length=255)
     summary: str | None = Field(default=None, max_length=500)
@@ -113,6 +120,11 @@ class KnowledgeUpsertRequest(BaseModel):
     category: str
     is_context_tip: bool = False
     is_published: bool = True
+
+    @field_validator("category")
+    @classmethod
+    def category_not_all(cls, value: str) -> str:
+        return _reject_all_category(value)
 
 
 class KnowledgeUpdateRequest(BaseModel):
@@ -122,3 +134,10 @@ class KnowledgeUpdateRequest(BaseModel):
     category: str | None = None
     is_context_tip: bool | None = None
     is_published: bool | None = None
+
+    @field_validator("category")
+    @classmethod
+    def category_not_all(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _reject_all_category(value)

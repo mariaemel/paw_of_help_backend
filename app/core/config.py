@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     seed_demo_data: bool = True
     verification_token_expire_hours: int = 24
+    yandex_geocoder_api_key: str | None = None
     redis_url: str | None = None
     cache_ttl_animals_catalogs: int = 1200
     cache_ttl_static_catalogs: int = 2700

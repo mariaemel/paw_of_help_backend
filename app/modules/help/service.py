@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.models.animal import AnimalStatus
 from app.modules.animals.age_format import format_age_months_ru
 from app.modules.animals.tags import species_label_ru
-from app.modules.help.bucket import help_bucket_for_request
+from app.modules.help.bucket import help_bucket_for_orphan_request, help_bucket_for_request
 from app.modules.help.repository import HelpRepository
 from app.modules.help.schemas import HelpAnimalCard, HelpListResponse, HelpMonetaryBrief
 
@@ -103,9 +103,67 @@ def _sort_tab_all(items: list[HelpAnimalCard]) -> None:
     def key(c: HelpAnimalCard) -> tuple[int, int, int]:
         has_pref = int(_pick_preferred(list(c.monetary)) is not None)
         urg = int(c.is_urgent)
-        return (-has_pref, -urg, int(c.animal_id))
+        tie = int(c.animal_id or 0)
+        if tie == 0 and c.monetary:
+            tie = int(c.monetary[0].request_id)
+        return (-has_pref, -urg, -tie)
 
     items.sort(key=key)
+
+
+def _orphan_photo(hr) -> str | None:
+    if hr.media_path:
+        return f"{settings.media_url_prefix}/{hr.media_path}"
+    org = getattr(hr, "organization", None)
+    if org and getattr(org, "logo_path", None):
+        return f"{settings.media_url_prefix}/{org.logo_path}"
+    return None
+
+
+def _build_help_orphan_card(hr) -> HelpAnimalCard | None:
+    bucket = help_bucket_for_orphan_request(hr)
+    if bucket is None:
+        return None
+    amt_raw = getattr(hr, "target_amount", None)
+    amt: float | None = float(amt_raw) if amt_raw is not None and amt_raw > 0 else None
+    monetaries = [
+        HelpMonetaryBrief(
+            request_id=int(hr.id),
+            help_bucket=bucket,
+            line=str(hr.title).strip(),
+            amount_rub=amt,
+        )
+    ]
+    org = getattr(hr, "organization", None)
+    return HelpAnimalCard(
+        animal_id=None,
+        organization_id=int(hr.organization_id) if hr.organization_id is not None else None,
+        name=str(hr.title).strip() or "Сбор средств",
+        species_tag="сбор",
+        age_tag="",
+        age_months=0,
+        status_chip="Сбор средств",
+        organization_name=(org.name if org else None),
+        location_city=getattr(hr, "city", None),
+        is_urgent=bool(getattr(hr, "is_urgent", False)),
+        monetary=monetaries,
+        adopt_ready=False,
+        primary_photo_url=_orphan_photo(hr),
+    )
+
+
+def _card_matches_tab(card: HelpAnimalCard, tl: str, bucket_filter: str | None) -> bool:
+    adopt_ready = card.adopt_ready
+    monetaries = list(card.monetary)
+    buckets_all = _buckets_present(adopt_ready, monetaries)
+
+    if tl == TAB_ADOPT:
+        return adopt_ready
+    if tl == TAB_ALL:
+        return True
+    if not bucket_filter or bucket_filter not in buckets_all:
+        return False
+    return bool(_scoped_monetary(monetaries, bucket_filter))
 
 
 def _build_help_animal_card(animal) -> HelpAnimalCard | None:
@@ -115,6 +173,7 @@ def _build_help_animal_card(animal) -> HelpAnimalCard | None:
         return None
     return HelpAnimalCard(
         animal_id=int(animal.id),
+        organization_id=int(animal.organization_id) if animal.organization_id is not None else None,
         name=animal.name,
         species_tag=species_label_ru(animal.species, animal.sex),
         age_tag=_age_tag_ru(int(animal.age_months or 0)),
@@ -149,27 +208,20 @@ class HelpService:
         items_out: list[HelpAnimalCard] = []
         for animal in self.repo.list_candidate_animals():
             card = _build_help_animal_card(animal)
-            if card is None:
+            if card is None or not _card_matches_tab(card, tl, bucket_filter):
                 continue
+            items_out.append(card)
 
-            adopt_ready = card.adopt_ready
-            monetaries = list(card.monetary)
-            buckets_all = _buckets_present(adopt_ready, monetaries)
-
-            if tl == TAB_ADOPT:
-                if not adopt_ready:
-                    continue
-
-            elif tl != TAB_ALL:
-                if not bucket_filter or bucket_filter not in buckets_all:
-                    continue
-                if not _scoped_monetary(monetaries, bucket_filter):
-                    continue
-
+        for hr in self.repo.list_orphan_fundraising_requests():
+            card = _build_help_orphan_card(hr)
+            if card is None or not _card_matches_tab(card, tl, bucket_filter):
+                continue
             items_out.append(card)
 
         if tl == TAB_ALL:
             _sort_tab_all(items_out)
+        else:
+            items_out.sort(key=lambda c: (-int(c.is_urgent), -int(c.monetary[0].request_id if c.monetary else 0)))
 
         return HelpListResponse(tab=tl, total=len(items_out), items=items_out)
 
@@ -177,6 +229,10 @@ class HelpService:
         items_out: list[HelpAnimalCard] = []
         for animal in self.repo.list_candidate_animals(organization_id=organization_id):
             card = _build_help_animal_card(animal)
+            if card is not None:
+                items_out.append(card)
+        for hr in self.repo.list_orphan_fundraising_requests(organization_id=organization_id):
+            card = _build_help_orphan_card(hr)
             if card is not None:
                 items_out.append(card)
         _sort_tab_all(items_out)

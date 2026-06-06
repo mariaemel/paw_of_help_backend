@@ -1048,6 +1048,36 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                 )
             )
 
+        if _has_table(conn, "events") and _has_table(conn, "users") and not _has_table(conn, "event_registrations"):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE event_registrations (
+                        id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        event_id INTEGER NOT NULL,
+                        created_at DATETIME,
+                        PRIMARY KEY (id),
+                        CONSTRAINT uq_event_registration_user_event UNIQUE (user_id, event_id),
+                        FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
+                        FOREIGN KEY(event_id) REFERENCES events (id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_event_registrations_user_id "
+                    "ON event_registrations (user_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_event_registrations_event_id "
+                    "ON event_registrations (event_id)"
+                )
+            )
+
         if _has_table(conn, "volunteer_help_responses") and not _has_table(conn, "volunteer_help_response_reports"):
             conn.execute(
                 text(

@@ -346,7 +346,7 @@ DEMO_ANIMALS: tuple[DemoAnimalSeed, ...] = (
         health_features="Период восстановления после операции.",
         treatment_required="Контроль у хирурга через 2 недели.",
         location_city="Екатеринбург",
-        is_urgent=True,
+        is_urgent=False,
         urgent_needs_text="Срочно нужна передержка и помощь транспортом.",
         status=AnimalStatus.ON_TREATMENT.value,
         help_options="Оплата лечения, передержка, автопомощь.",
@@ -706,6 +706,44 @@ def ensure_demo_knowledge_articles(db: Session, volunteer_user_id: int, organiza
             volunteer_user_id,
             "volunteer",
         ),
+        (
+            "Перевозка собаки в ветклинику",
+            "Как безопасно доставить крупную или тревожную собаку на осмотр или процедуру.",
+            "care",
+            """Перед поездкой согласуйте с куратором время, адрес клиники и контакт ветеринара. Возьмите поводок, намордник при необходимости, переноску или плед для подстилки в машине, пакеты и салфетки.
+
+Посадка: не тяните собаку силой. Дайте понюхать машину, зафиксируйте на заднем сиденье через ремень безопасности или в багажнике за сеткой — не на переднем и не на коленях водителя.
+
+В пути говорите спокойно, избегайте резких поворотов и громкой музыки. Окно приоткрыто на щель для воздуха, но без высовывания головы. Если животное пугается — короткие остановки лучше, чем спор «доберёмся быстрее».
+
+В клинике не оставляйте собаку без присмотра. Передайте сотруднику кратко: кличка, что случилось, есть ли аллергии, чем кормят. Запишите рекомендации врача для куратора приюта.
+
+После поездки сообщите куратору, что доставка выполнена, и отметьте любые особенности поведения — это поможет следующему волонтёру.""",
+            True,
+            organization_user_id,
+            "organization",
+        ),
+        (
+            "Как сфотографировать собаку для приюта",
+            "Свет, ракурс и спокойная обстановка — чтобы фото помогло найти дом.",
+            "training",
+            """Фото для карточки приюта должно показывать характер животного, а не только «милую мордочку». Согласуйте с куратором, где можно снимать: тихий угол, прогулочная площадка или вольер без сильного шума.
+
+Свет: лучше дневной, рассеянный. Не используйте вспышку в лицо испуганной собаке — глаза получатся «демоническими», шерсть бликует. Если в помещении темно, подойдите к окну или снимайте на улице.
+
+Ракурс: на уровне глаз собаки, не сверху «как на документ». Покажите рост и пропорции — так проще представить животное дома. Одно фото крупным планом и одно в полный рост обычно достаточно.
+
+Фон: без мусора, проводов и людей в кадре. Простой забор, зелень или стена приюта работают лучше, чем хаос вольера.
+
+Поведение: не шипите, не махайте руками. Дайте собаке привыкнуть 2–3 минуты, используйте лакомство или игрушку, чтобы поймать живой взгляд. Снимайте серию — потом выберете резкое и спокойное.
+
+Безопасность: поводок и шлейка обязательны, не открывайте вольер без сопровождения смены. Если собака стрессует — остановитесь, не «дожимайте кадр».
+
+После съёмки передайте файлы куратору в согласованном формате и не публикуйте в соцсетях без разрешения приюта.""",
+            True,
+            organization_user_id,
+            "organization",
+        ),
     ]
     for title, summary, category, content, is_tip, uid, role in rows:
         read_minutes = KnowledgeService._estimate_read_minutes(content)
@@ -748,7 +786,55 @@ def ensure_demo_knowledge_articles(db: Session, volunteer_user_id: int, organiza
     if stale is not None:
         db.delete(stale)
 
+    _sync_context_tip_targets(db)
     _sync_demo_article_covers(db, _SEED_ANIMAL_IMAGES_DIR.is_dir())
+
+
+def _sync_context_tip_targets(db: Session) -> None:
+    targets: dict[str, dict[str, list[str]]] = {
+        "Первая помощь при небольшом порезе лапы": {
+            "target_help_types_json": ["medical", "manual", "walk"],
+            "target_species_json": ["cat", "dog"],
+            "target_competency_slugs_json": ["medical", "walk"],
+            "keywords_json": ["порез", "лапа", "рана", "кровотечение", "ветеринар"],
+        },
+        "Как ухаживать за животным после лечения": {
+            "target_help_types_json": ["medical", "foster"],
+            "target_species_json": ["cat", "dog"],
+            "target_competency_slugs_json": ["medical", "foster"],
+            "keywords_json": ["лечение", "операция", "ветеринар", "препарат"],
+        },
+        "Базовый уход за кошкой в приюте": {
+            "target_help_types_json": ["manual", "foster", "walk"],
+            "target_species_json": ["cat"],
+            "target_competency_slugs_json": ["manual", "foster", "walk"],
+            "keywords_json": ["кошка", "приют", "лоток", "кормление", "гигиена"],
+        },
+        "Перевозка собаки в ветклинику": {
+            "target_help_types_json": ["auto"],
+            "target_species_json": ["dog"],
+            "target_competency_slugs_json": ["auto"],
+            "keywords_json": ["перевоз", "авто", "клиник", "собак", "машин", "ветеринар"],
+        },
+        "Что делать при подозрении на отравление": {
+            "target_help_types_json": ["medical"],
+            "target_species_json": ["cat", "dog"],
+            "target_competency_slugs_json": ["medical"],
+            "keywords_json": ["отравление", "рвота", "ветеринар", "клиника", "экстрен"],
+        },
+        "Как сфотографировать собаку для приюта": {
+            "target_help_types_json": ["photo_video", "manual"],
+            "target_species_json": ["dog", "cat"],
+            "target_competency_slugs_json": ["photo_video"],
+            "keywords_json": ["фото", "фотосъемка", "съемка", "сним", "приют", "собак"],
+        },
+    }
+    for title, payload in targets.items():
+        article = db.query(KnowledgeArticle).filter(KnowledgeArticle.title == title).first()
+        if article is None:
+            continue
+        for field, values in payload.items():
+            setattr(article, field, json.dumps(values, ensure_ascii=False))
 
 
 def ensure_demo_events(db: Session, org1: Organization, org2: Organization) -> None:
@@ -784,6 +870,9 @@ def ensure_demo_events(db: Session, org1: Organization, org2: Organization) -> N
             "ends_at": starts + timedelta(days=7, hours=4),
             "latitude": 59.9343,
             "longitude": 30.3351,
+            "entry_type": "limited",
+            "capacity": 20,
+            "seats_taken": 20,
         },
         {
             "title": "Онлайн-лекция: первая помощь животным",
@@ -798,6 +887,9 @@ def ensure_demo_events(db: Session, org1: Organization, org2: Organization) -> N
             "ends_at": starts + timedelta(days=3, hours=2),
             "latitude": None,
             "longitude": None,
+            "entry_type": "limited",
+            "capacity": 50,
+            "seats_taken": 12,
         },
     ]
     for spec in rows:
@@ -905,6 +997,26 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
         },
         {
             "organization_id": org2.id,
+            "animal_id": grey.id if grey and grey.organization_id == org2.id else None,
+            "title": "Нужно провести съемку собаки",
+            "description": "Нужно приехать, сделать живые фотографии собаки для карточки приюта.",
+            "city": "Санкт-Петербург",
+            "address": "пр. Заботы, 5",
+            "help_type": "photo_video",
+            "is_urgent": False,
+            "volunteer_needed": True,
+            "volunteer_requirements": "Нужны естественные фото на улице или во дворе приюта.",
+            "volunteer_competencies_json": json.dumps(["photo_video"], ensure_ascii=False),
+            "target_amount": None,
+            "deadline_at": datetime(2026, 6, 29, 5, 50, 0),
+            "deadline_note": None,
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org2.id,
             "animal_id": None,
             "title": "Котята из подвала",
             "description": "У пятерых котят энтерит. Срочно нужен антибиотик и лечебный паштет.",
@@ -930,6 +1042,8 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             db.add(HelpRequest(**spec))
             continue
         for key, value in spec.items():
+            if key == "status":
+                continue
             setattr(item, key, value)
 
     _sync_help_demo_animal_links(db)
@@ -1748,9 +1862,28 @@ def ensure_demo_org2_incoming_volunteer_response(db: Session, org2: Organization
     volunteer = db.query(User).filter(User.email == "volunteer2@example.com").first()
     if volunteer is None:
         return
+
+    blocking = (
+        db.query(VolunteerHelpResponse)
+        .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
+        .filter(
+            VolunteerHelpResponse.volunteer_user_id == volunteer.id,
+            HelpRequest.organization_id == org2.id,
+            HelpRequest.volunteer_needed.is_(True),
+            VolunteerHelpResponse.status == VolunteerHelpResponseStatus.PENDING.value,
+        )
+        .all()
+    )
+    for row in blocking:
+        db.delete(row)
+
     req = (
         db.query(HelpRequest)
-        .filter(HelpRequest.organization_id == org2.id, HelpRequest.status == "open")
+        .filter(
+            HelpRequest.organization_id == org2.id,
+            HelpRequest.status == "open",
+            HelpRequest.volunteer_needed.is_(False),
+        )
         .order_by(HelpRequest.created_at.desc(), HelpRequest.id.desc())
         .first()
     )
@@ -1983,8 +2116,22 @@ def enrich_demo_volunteers(db: Session) -> None:
     v2 = db.query(User).filter(User.email == "volunteer2@example.com").first()
     if v2 and v2.volunteer_profile:
         p2 = v2.volunteer_profile
-        if not p2.competency_assignments:
-            _set_volunteer_competency_slugs(db, p2.id, ("foster", "walk", "manual"))
+        _set_volunteer_competency_slugs(
+            db,
+            p2.id,
+            (
+                "walk",
+                "photo_video",
+                "foster",
+                "texts_social",
+                "manual",
+                "auto",
+                "medical",
+                "rescue",
+                "events",
+                "fundraising",
+            ),
+        )
         if p2.animal_types_json is None:
             p2.animal_types_json = json.dumps(["cat"], ensure_ascii=False)
         if p2.experience_level is None:

@@ -2,6 +2,7 @@ from app.models.adoption_application import AnimalAdoptionApplication, AdoptionA
 from app.models.animal import Animal, AnimalPhoto
 from app.models.animal_catalog import AnimalCatalogAssignment, AnimalCatalogItem
 from app.models.event import Event
+from app.models.event_registration import EventRegistration
 from app.models.help_request import HelpRequest
 from app.models.knowledge import KnowledgeArticle
 from app.models.organization import Organization
@@ -37,6 +38,7 @@ __all__ = [
     "HelpRequest",
     "KnowledgeArticle",
     "Event",
+    "EventRegistration",
     "Organization",
     "OrgChatDialog",
     "OrgChatMessage",

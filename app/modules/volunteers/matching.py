@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.geo import haversine_km
+from app.core.list_query import cities_match_for_volunteer
 from app.models.help_request import HelpRequest
 
 DEFAULT_RADIUS_KM = 50
@@ -71,15 +72,24 @@ def _location_score(ctx: VolunteerMatchContext, req: HelpRequest, dist: float | 
         if dist <= radius:
             reasons.append("nearby")
             return max(5.0, 28.0 * (1.0 - dist / max(radius, 1.0))), reasons
+        volunteer_city = (ctx.location_city or "").strip()
+        request_city = (req.city or "").strip()
+        if volunteer_city and request_city and cities_match_for_volunteer(volunteer_city, request_city):
+            reasons.append("same_city")
+            return 14.0, reasons
         return -1.0, []
 
-    volunteer_city = (ctx.location_city or "").strip().lower()
-    request_city = (req.city or "").strip().lower()
+    volunteer_city = (ctx.location_city or "").strip()
+    request_city = (req.city or "").strip()
     if volunteer_city and request_city:
-        if volunteer_city == request_city:
+        if cities_match_for_volunteer(volunteer_city, request_city):
             reasons.append("same_city")
             return 18.0, reasons
-        return 0.0, []
+        return -1.0, []
+
+    if volunteer_city and not request_city:
+        reasons.append("location_unknown")
+        return 6.0, reasons
 
     reasons.append("location_unknown")
     return 8.0, reasons
@@ -99,13 +109,10 @@ def score_volunteer_task(ctx: VolunteerMatchContext, req: HelpRequest) -> Scored
     score = loc_score
 
     if required:
-        overlap = ctx.competency_slugs & required
-        skill_ratio = len(overlap) / len(required)
-        score += 42.0 * skill_ratio
-        if overlap:
-            reasons.append("skills_match")
-        if skill_ratio < 0.34:
+        if not required.issubset(ctx.competency_slugs):
             return None
+        score += 42.0
+        reasons.append("skills_match")
     elif ctx.competency_slugs:
         score += 12.0
         reasons.append("general_skills")

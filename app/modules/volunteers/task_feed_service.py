@@ -3,7 +3,11 @@ import json
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.user import User, UserRole
+from app.modules.knowledge.hints import build_help_request_knowledge_hints
+from app.modules.knowledge.repository import KnowledgeRepository
+from app.modules.knowledge.schemas import KB_CATEGORY_OPTIONS, KnowledgeHintItem
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.service import UrgentService
 from app.modules.volunteers.matching import (
@@ -18,6 +22,15 @@ from app.modules.volunteers.schemas import (
     VolunteerTaskFeedResponse,
 )
 from app.modules.volunteers.task_feed_repository import VolunteerTaskFeedRepository
+
+_CATEGORY_LABELS = {x["id"]: x["label"] for x in KB_CATEGORY_OPTIONS}
+
+
+def _cover_url(path: str | None) -> str | None:
+    if not path or not str(path).strip():
+        return None
+    return f"{settings.media_url_prefix}/{str(path).strip().lstrip('/')}"
+
 
 _MATCH_REASON_LABELS: dict[str, str] = {
     "nearby": "Рядом с вами",
@@ -39,6 +52,35 @@ class VolunteerTaskFeedService:
         self.db = db
         self.repo = VolunteerTaskFeedRepository(db)
         self.urgent = UrgentService(UrgentRepository(db))
+        self._knowledge_repo = KnowledgeRepository(db)
+        self._hint_articles: list | None = None
+
+    def _context_tip_articles(self):
+        if self._hint_articles is None:
+            self._hint_articles = self._knowledge_repo.list_context_tip_candidates()
+        return self._hint_articles
+
+    def _knowledge_hints_for_request(self, req, required_competencies: list[str]) -> list[KnowledgeHintItem]:
+        picked = build_help_request_knowledge_hints(
+            req,
+            required_competencies=required_competencies,
+            articles=self._context_tip_articles(),
+            limit=2,
+        )
+        return [
+            KnowledgeHintItem(
+                id=row.article.id,
+                title=row.article.title,
+                summary=row.article.summary,
+                cover_url=_cover_url(row.article.cover_path),
+                category=row.article.category,
+                category_label=_CATEGORY_LABELS.get(row.article.category),
+                read_minutes=row.article.read_minutes,
+                match_score=row.score,
+                match_reasons=list(row.reasons),
+            )
+            for row in picked
+        ]
 
     def _build_context(self, user: User) -> VolunteerMatchContext:
         profile = user.volunteer_profile
@@ -90,6 +132,10 @@ class VolunteerTaskFeedService:
         if loaded is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
+        profile = loaded.volunteer_profile
+        if profile is not None:
+            self.db.expire(profile, ["competency_assignments"])
+
         ctx = self._build_context(loaded)
         completed_count = self.repo.count_completed_tasks(user.id)
 
@@ -116,14 +162,24 @@ class VolunteerTaskFeedService:
         items: list[VolunteerTaskFeedItem] = []
         for row in page:
             base = self.urgent._to_item(row.request)
+            req = row.request
+            lat, lon = req.latitude, req.longitude
+            if (lat is None or lon is None) and req.organization is not None:
+                org = req.organization
+                if org.latitude is not None and org.longitude is not None:
+                    lat, lon = org.latitude, org.longitude
             items.append(
                 VolunteerTaskFeedItem(
                     **base.model_dump(),
+                    address=req.address,
+                    latitude=lat,
+                    longitude=lon,
                     match_score=row.match_score,
                     match_reasons=list(row.match_reasons),
                     match_reason_labels=[_MATCH_REASON_LABELS.get(r, r) for r in row.match_reasons],
                     distance_km=row.distance_km,
                     required_competencies=list(row.required_competencies),
+                    knowledge_hints=self._knowledge_hints_for_request(row.request, list(row.required_competencies)),
                 )
             )
 

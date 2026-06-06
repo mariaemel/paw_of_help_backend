@@ -55,6 +55,7 @@ class UrgentRequestListItem(BaseModel):
         description="Счёт для перевода: заявки или организации",
     )
     uses_organization_payment_details: bool = True
+    is_published: bool = True
     badges: list[str] = Field(default_factory=list)
 
 
@@ -122,7 +123,10 @@ class UrgentRequestCreate(BaseModel):
         description="Счёт для этой заявки; сохраняется только если отличается от счёта организации",
     )
     status: str = Field(default="open", description="open | in_progress | closed")
-    is_published: bool = True
+    is_published: bool = Field(
+        default=False,
+        description="False — черновик; не попадает в публичные ленты до публикации",
+    )
 
 
 class UrgentRequestUpdate(BaseModel):

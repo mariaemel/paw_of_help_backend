@@ -1,4 +1,4 @@
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.geo import filter_sort_paginate_nearby
@@ -175,7 +175,7 @@ class OrganizationRepository:
             self.db.query(KnowledgeArticle)
             .filter(
                 KnowledgeArticle.author_user_id == author_user_id,
-                KnowledgeArticle.owner_role == "organization",
+                func.lower(KnowledgeArticle.owner_role) == "organization",
                 KnowledgeArticle.is_published.is_(True),
                 KnowledgeArticle.is_archived.is_(False),
                 KnowledgeArticle.is_context_tip.is_(False),

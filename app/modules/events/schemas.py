@@ -32,9 +32,10 @@ class EventListItem(BaseModel):
     seats_taken: int = 0
     seats_available: int | None = None
     is_full: bool = False
+    is_registered: bool = False
     registration_action: str = Field(
         default="details",
-        description="details — свободный вход; signup — запись; full — мест нет",
+        description="details — свободный вход; signup — запись; full — мест нет; registered — уже записан",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -59,6 +60,7 @@ class EventDetail(BaseModel):
     seats_taken: int = 0
     seats_available: int | None = None
     is_full: bool = False
+    is_registered: bool = False
     registration_action: str = "details"
 
 
@@ -128,4 +130,5 @@ class EventRegistrationResponse(BaseModel):
     seats_taken: int
     seats_available: int | None = None
     is_full: bool
+    is_registered: bool = True
     registration_action: str

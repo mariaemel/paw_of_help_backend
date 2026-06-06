@@ -9,7 +9,11 @@ class HelpMonetaryBrief(BaseModel):
 
 
 class HelpAnimalCard(BaseModel):
-    animal_id: int
+    animal_id: int | None = Field(
+        default=None,
+        description="None — сбор без привязки к подопечному (карточка по заявке)",
+    )
+    organization_id: int | None = None
     name: str
     species_tag: str
     age_tag: str

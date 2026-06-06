@@ -1,7 +1,7 @@
 import math
 import re
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 
 from app.core.cache import cached_model, get_json, is_enabled, set_json
 from app.core.cache_keys import KNOWLEDGE_CATALOGS, knowledge_article_key
@@ -11,6 +11,7 @@ from app.models.knowledge import KnowledgeArticle
 from app.models.user import User, UserRole
 from app.modules.knowledge.hints import HintContext, pick_hints
 from app.modules.knowledge.repository import KnowledgeRepository
+from app.modules.knowledge.storage import save_knowledge_cover
 from app.modules.knowledge.schemas import (
     KB_CATEGORY_OPTIONS,
     CatalogOption,
@@ -262,6 +263,20 @@ class KnowledgeService:
         self.repo.db.delete(art)
         self.repo.db.commit()
         invalidate_knowledge_article(article_id)
+
+    def upload_cover(self, article_id: int, user: User, file: UploadFile) -> KnowledgeDetail:
+        self._ensure_writer(user)
+        art = self.repo.get_article_for_owner(article_id)
+        if not art:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+        self._ensure_can_edit(art, user)
+        try:
+            art.cover_path = save_knowledge_cover(settings.media_dir, int(art.id), file)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        self.repo.db.commit()
+        invalidate_knowledge_article(article_id)
+        return self.get_detail(art.id, user)
 
     def archive_article(self, article_id: int, user: User) -> KnowledgeDetail:
         self._ensure_writer(user)

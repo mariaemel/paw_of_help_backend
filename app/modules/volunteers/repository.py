@@ -1,5 +1,5 @@
 from sqlalchemy import asc, desc, exists, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.geo import filter_sort_paginate_nearby
 from app.core.list_query import apply_city_filter, apply_text_search, geo_bbox_clauses
@@ -50,9 +50,10 @@ class VolunteerRepository:
         row = (
             self.db.query(User, VolunteerProfile)
             .options(
+                joinedload(User.user_profile),
                 selectinload(User.volunteer_profile)
                 .selectinload(VolunteerProfile.competency_assignments)
-                .selectinload(VolunteerCompetencyAssignment.competency_item)
+                .selectinload(VolunteerCompetencyAssignment.competency_item),
             )
             .join(VolunteerProfile, VolunteerProfile.user_id == User.id)
             .filter(User.id == user_id, User.role == UserRole.VOLUNTEER)
@@ -110,9 +111,10 @@ class VolunteerRepository:
     def list_volunteers(self, filters: VolunteerFilterParams) -> tuple[int, list[tuple[User, VolunteerProfile]]]:
         q = self._list_volunteers_query(filters)
         load_opts = (
+            joinedload(User.user_profile),
             selectinload(User.volunteer_profile)
             .selectinload(VolunteerProfile.competency_assignments)
-            .selectinload(VolunteerCompetencyAssignment.competency_item)
+            .selectinload(VolunteerCompetencyAssignment.competency_item),
         )
 
         if filters.nearby and filters.latitude is not None and filters.longitude is not None:

@@ -1,4 +1,4 @@
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session
 
 from app.core.list_query import apply_text_search
@@ -53,9 +53,10 @@ class KnowledgeRepository:
     def list_my_articles(
         self, author_user_id: int, owner_role: str, limit: int, offset: int, tab: str = "all"
     ) -> tuple[int, list[KnowledgeArticle]]:
+        owner_role_norm = owner_role.strip().lower()
         q = self.db.query(KnowledgeArticle).filter(
             KnowledgeArticle.author_user_id == author_user_id,
-            KnowledgeArticle.owner_role == owner_role,
+            func.lower(KnowledgeArticle.owner_role) == owner_role_norm,
         )
         if tab == "archive":
             q = q.filter(KnowledgeArticle.is_archived.is_(True))

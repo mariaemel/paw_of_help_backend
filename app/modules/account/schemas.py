@@ -74,6 +74,8 @@ class MeProfileResponse(BaseModel):
 
 class UserRoleProfilePatch(BaseModel):
     full_name: str | None = Field(default=None, max_length=255)
+    email: EmailStr | None = Field(default=None, description="Новый e-mail (не служебный @reg.paw)")
+    phone: str | None = Field(default=None, max_length=32, description="Телефон или пустая строка для удаления")
 
 
 class VolunteerSelfPatch(BaseModel):

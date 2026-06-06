@@ -21,7 +21,7 @@ from app.modules.events.schemas import (
 )
 
 
-def _event_registration_meta(event: Event) -> dict:
+def _event_registration_meta(event: Event, *, is_registered: bool = False) -> dict:
     entry = (event.entry_type or "free").strip().lower()
     capacity = event.capacity
     taken = int(event.seats_taken or 0)
@@ -32,16 +32,28 @@ def _event_registration_meta(event: Event) -> dict:
             "seats_taken": taken,
             "seats_available": None,
             "is_full": False,
+            "is_registered": False,
             "registration_action": "details",
         }
     available = max(int(capacity) - taken, 0)
     is_full = available <= 0
+    if is_registered:
+        return {
+            "entry_type": "limited",
+            "capacity": int(capacity),
+            "seats_taken": taken,
+            "seats_available": available,
+            "is_full": is_full,
+            "is_registered": True,
+            "registration_action": "registered",
+        }
     return {
         "entry_type": "limited",
         "capacity": int(capacity),
         "seats_taken": taken,
         "seats_available": available,
         "is_full": is_full,
+        "is_registered": False,
         "registration_action": "full" if is_full else "signup",
     }
 
@@ -50,11 +62,14 @@ class EventService:
     def __init__(self, repo: EventRepository):
         self.repo = repo
 
-    def list_events(self, filters: EventFilterParams) -> EventListResponse:
+    def list_events(self, filters: EventFilterParams, user: User | None = None) -> EventListResponse:
         total, rows = self.repo.list_events(filters)
+        registered_ids: set[int] = set()
+        if user is not None:
+            registered_ids = self.repo.list_user_registered_event_ids(user.id, [e.id for e, _ in rows])
         items: list[EventListItem] = []
         for e, org in rows:
-            meta = _event_registration_meta(e)
+            meta = _event_registration_meta(e, is_registered=e.id in registered_ids)
             items.append(
                 EventListItem(
                     id=e.id,
@@ -91,12 +106,13 @@ class EventService:
             _load,
         )
 
-    def get_detail(self, event_id: int) -> EventDetail:
+    def get_detail(self, event_id: int, user: User | None = None) -> EventDetail:
         row = self.repo.get_event(event_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         event, org = row
-        meta = _event_registration_meta(event)
+        is_registered = user is not None and self.repo.is_user_registered(user.id, event.id)
+        meta = _event_registration_meta(event, is_registered=is_registered)
         return EventDetail(
             id=event.id,
             title=event.title,
@@ -128,8 +144,8 @@ class EventService:
         return org
 
     @staticmethod
-    def _to_detail(event: Event, org: Organization | None) -> EventDetail:
-        meta = _event_registration_meta(event)
+    def _to_detail(event: Event, org: Organization | None, *, is_registered: bool = False) -> EventDetail:
+        meta = _event_registration_meta(event, is_registered=is_registered)
         return EventDetail(
             id=event.id,
             title=event.title,
@@ -213,26 +229,46 @@ class EventService:
             event.entry_type = entry
             if entry == "free":
                 event.capacity = None
-            elif event.capacity is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите capacity для limited")
+        effective_entry = (event.entry_type or "free").strip().lower()
+        if payload.capacity is not None:
+            if effective_entry != "limited":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="capacity можно указать только для limited",
+                )
+            taken = int(event.seats_taken or 0)
+            if int(payload.capacity) < taken:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Лимит не может быть меньше уже записавшихся ({taken})",
+                )
+            event.capacity = int(payload.capacity)
+        elif payload.entry_type is not None and effective_entry == "limited" and event.capacity is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите capacity для limited")
         self.repo.db.commit()
         self.repo.db.refresh(event)
         return self._to_detail(event, owner_org)
 
-    def register_for_event(self, event_id: int) -> EventRegistrationResponse:
+    def register_for_event(self, event_id: int, user: User) -> EventRegistrationResponse:
         row = self.repo.get_event(event_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         event, _org = row
+        if self.repo.is_user_registered(user.id, event.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Вы уже записаны на это мероприятие",
+            )
         meta = _event_registration_meta(event)
         if meta["registration_action"] == "details":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="На это мероприятие не нужна запись")
         if meta["is_full"]:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Мест больше нет")
+        self.repo.create_registration(user.id, event.id)
         event.seats_taken = int(event.seats_taken or 0) + 1
         self.repo.db.commit()
         self.repo.db.refresh(event)
-        meta = _event_registration_meta(event)
+        meta = _event_registration_meta(event, is_registered=True)
         return EventRegistrationResponse(event_id=event.id, **meta)
 
     def archive_event(self, event_id: int, user: User) -> EventDetail:

@@ -441,6 +441,9 @@ class AccountRepository:
             .options(
                 joinedload(VolunteerHelpResponse.volunteer),
                 joinedload(VolunteerHelpResponse.help_request),
+                joinedload(VolunteerHelpResponse.report).selectinload(
+                    VolunteerHelpResponseReport.photos
+                ),
             )
             .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
             .join(User, User.id == VolunteerHelpResponse.volunteer_user_id)
@@ -469,7 +472,9 @@ class AccountRepository:
             .options(
                 joinedload(VolunteerHelpResponse.volunteer),
                 joinedload(VolunteerHelpResponse.help_request),
-                joinedload(VolunteerHelpResponse.report),
+                joinedload(VolunteerHelpResponse.report).selectinload(
+                    VolunteerHelpResponseReport.photos
+                ),
             )
             .join(HelpRequest, HelpRequest.id == VolunteerHelpResponse.help_request_id)
             .filter(
@@ -874,7 +879,7 @@ class AccountRepository:
     def list_org_articles(self, owner_user_id: int, limit: int, offset: int) -> tuple[int, list[KnowledgeArticle]]:
         query = self.db.query(KnowledgeArticle).filter(
             KnowledgeArticle.author_user_id == owner_user_id,
-            KnowledgeArticle.owner_role == "organization",
+            func.lower(KnowledgeArticle.owner_role) == "organization",
         )
         total = int(query.count() or 0)
         rows = (

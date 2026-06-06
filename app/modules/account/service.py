@@ -22,7 +22,9 @@ from app.models.volunteer_help_response import VolunteerHelpResponse, VolunteerH
 from app.models.volunteer_help_response_report import VolunteerHelpResponseReport
 from app.models.volunteer_help_response_report_photo import VolunteerHelpResponseReportPhoto
 from app.models.user import User, UserRole
+from app.modules.account.geocode import sync_volunteer_profile_coords
 from app.modules.account.repository import AccountRepository
+from app.modules.auth.contact import normalize_phone_ru
 from app.modules.account import schemas as s
 from app.modules.account.storage import (
     save_org_asset,
@@ -264,6 +266,27 @@ class AccountService:
 
         return s.MeProfileResponse(user=brief, user_profile=user_prof, volunteer_profile=vol_prof)
 
+    @staticmethod
+    def _is_synthetic_reg_email(email: str) -> bool:
+        e = (email or "").strip().lower()
+        return bool(e) and e.endswith("@reg.paw") and e.startswith("phone")
+
+    def _ensure_email_available(self, user_id: int, email: str) -> None:
+        row = self.repo.db.query(User).filter(User.email == email, User.id != user_id).first()
+        if row:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Учётная запись с таким e-mail уже есть",
+            )
+
+    def _ensure_phone_available(self, user_id: int, phone: str) -> None:
+        row = self.repo.db.query(User).filter(User.phone == phone, User.id != user_id).first()
+        if row:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Телефон уже зарегистрирован",
+            )
+
     def patch_profile(self, user: User, payload: s.MeProfilePatchRequest) -> s.MeProfileResponse:
         u = self.repo.get_user_me(user.id)
         if u is None:
@@ -276,6 +299,37 @@ class AccountService:
             if uf.full_name is not None:
                 u.full_name = uf.full_name.strip() or None
                 changed = True
+            if uf.email is not None:
+                new_email = str(uf.email).strip().lower()
+                if self._is_synthetic_reg_email(new_email):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Укажите корректный e-mail",
+                    )
+                if new_email != (u.email or "").strip().lower():
+                    self._ensure_email_available(u.id, new_email)
+                    u.email = new_email
+                    u.is_email_verified = False
+                    changed = True
+            if uf.phone is not None:
+                raw = uf.phone.strip()
+                if not raw:
+                    if u.phone is not None:
+                        u.phone = None
+                        u.is_phone_verified = False
+                        changed = True
+                else:
+                    normalized = normalize_phone_ru(raw)
+                    if normalized is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Укажите корректный номер телефона",
+                        )
+                    if normalized != u.phone:
+                        self._ensure_phone_available(u.id, normalized)
+                        u.phone = normalized
+                        u.is_phone_verified = False
+                        changed = True
 
         elif u.role == UserRole.VOLUNTEER and payload.volunteer is not None:
             vf = payload.volunteer
@@ -400,6 +454,9 @@ class AccountService:
                 changed = True
             if vf.longitude is not None:
                 vp.longitude = vf.longitude
+                changed = True
+
+            if sync_volunteer_profile_coords(vp):
                 changed = True
 
         elif u.role == UserRole.ORGANIZATION and payload.organization_contact is not None:

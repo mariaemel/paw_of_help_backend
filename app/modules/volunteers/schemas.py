@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.knowledge.schemas import KnowledgeHintItem
+
 WeekdaySlug = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
@@ -108,6 +110,7 @@ class VolunteerPublicArticleCard(BaseModel):
     id: int
     title: str
     summary: str | None = None
+    cover_url: str | None = None
     read_minutes: int = 5
     category: str
     category_label: str
@@ -163,6 +166,9 @@ class VolunteerTaskFeedItem(BaseModel):
     title: str
     description: str
     city: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     organization_id: int
     organization_name: str
     animal_id: int | None = None
@@ -184,6 +190,7 @@ class VolunteerTaskFeedItem(BaseModel):
     match_reason_labels: list[str] = Field(default_factory=list)
     distance_km: float | None = None
     required_competencies: list[str] = Field(default_factory=list)
+    knowledge_hints: list[KnowledgeHintItem] = Field(default_factory=list)
 
 
 class VolunteerTaskFeedResponse(BaseModel):

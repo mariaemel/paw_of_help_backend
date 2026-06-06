@@ -3,6 +3,7 @@ import json
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.models.profile import VolunteerProfile
 from app.models.user import User, UserRole
 from app.modules.animals.jsonutil import parse_json_list
 from app.modules.volunteers.constants import (
@@ -57,6 +58,15 @@ class VolunteerService:
         if not path:
             return None
         return f"{settings.media_url_prefix}/{path}"
+
+    def _volunteer_avatar_url(self, user: User, profile: VolunteerProfile) -> str | None:
+        url = self._media_url(profile.avatar_path)
+        if url:
+            return url
+        up = user.user_profile
+        if up is not None and up.avatar_path:
+            return self._media_url(up.avatar_path)
+        return None
 
     @staticmethod
     def _competency_slugs_labels_from_profile(profile) -> tuple[list[str], list[str]]:
@@ -176,7 +186,7 @@ class VolunteerService:
         return VolunteerListItem(
             user_id=user.id,
             full_name=user.full_name,
-            avatar_url=self._media_url(profile.avatar_path),
+            avatar_url=self._volunteer_avatar_url(user, profile),
             location_city=profile.location_city,
             experience_level=exp_id,
             experience_level_label=EXPERIENCE_LEVEL_LABELS.get(exp_id) if exp_id else None,
@@ -243,6 +253,7 @@ class VolunteerService:
                 id=a.id,
                 title=a.title,
                 summary=a.summary,
+                cover_url=self._media_url(getattr(a, "cover_path", None)),
                 read_minutes=int(a.read_minutes or 5),
                 category=a.category,
                 category_label=KNOWLEDGE_CATEGORY_LABELS.get(a.category, a.category),
@@ -259,7 +270,7 @@ class VolunteerService:
         return VolunteerDetail(
             user_id=user.id,
             full_name=user.full_name,
-            avatar_url=self._media_url(profile.avatar_path),
+            avatar_url=self._volunteer_avatar_url(user, profile),
             completed_tasks_count=completed,
             readiness_status=readiness_status,
             readiness_label=readiness_label,

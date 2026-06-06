@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user_optional, require_roles
@@ -118,6 +118,16 @@ def update_article(
     service: KnowledgeService = Depends(get_knowledge_service),
 ):
     return service.update_article(article_id, user, payload)
+
+
+@router.post("/{article_id}/cover", response_model=KnowledgeDetail)
+def upload_article_cover(
+    article_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(_kb_writers),
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    return service.upload_cover(article_id, user, file)
 
 
 @router.post("/{article_id}/archive", response_model=KnowledgeDetail)

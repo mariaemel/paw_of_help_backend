@@ -139,6 +139,7 @@ class UrgentService:
             animal_photo_url=animal_photo,
             payment_details=self._payment_details_payload(req),
             uses_organization_payment_details=uses_organization_payment_details(req),
+            is_published=bool(req.is_published),
             badges=badges,
         )
 
@@ -190,6 +191,9 @@ class UrgentService:
     def get_detail(self, request_id: int) -> UrgentRequestDetail:
         req = self.repo.get_request(request_id)
         if req is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
+        help_type = (req.help_type or "").strip().lower()
+        if req.volunteer_needed or help_type not in FUNDRAISING_HELP_TYPE_IDS:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Help request not found")
         return self._to_detail(req)
 

@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_roles
+from app.core.deps import get_current_user, get_current_user_optional, require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.modules.events.repository import EventRepository
@@ -40,6 +40,7 @@ def list_events(
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     sort_by: str = Query(default="starts_at"),
+    user: User | None = Depends(get_current_user_optional),
     service: EventService = Depends(get_event_service),
 ):
     help_list: list[str] = []
@@ -60,7 +61,7 @@ def list_events(
         offset=offset,
         sort_by=sort_by,
     )
-    return service.list_events(filters)
+    return service.list_events(filters, user=user)
 
 
 @router.get("/catalogs", response_model=EventCatalogsResponse)
@@ -69,13 +70,21 @@ def event_catalogs(service: EventService = Depends(get_event_service)):
 
 
 @router.get("/{event_id}", response_model=EventDetail)
-def event_detail(event_id: int, service: EventService = Depends(get_event_service)):
-    return service.get_detail(event_id)
+def event_detail(
+    event_id: int,
+    user: User | None = Depends(get_current_user_optional),
+    service: EventService = Depends(get_event_service),
+):
+    return service.get_detail(event_id, user=user)
 
 
 @router.post("/{event_id}/register", response_model=EventRegistrationResponse)
-def register_for_event(event_id: int, service: EventService = Depends(get_event_service)):
-    return service.register_for_event(event_id)
+def register_for_event(
+    event_id: int,
+    user: User = Depends(get_current_user),
+    service: EventService = Depends(get_event_service),
+):
+    return service.register_for_event(event_id, user)
 
 
 @router.post("", response_model=EventDetail)
