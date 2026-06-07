@@ -1145,3 +1145,21 @@ def ensure_sqlite_schema(engine: Engine) -> None:
                     "ON events (latitude, longitude)"
                 )
             )
+
+
+def ensure_postgres_schema(engine: Engine) -> None:
+    """Idempotent patches for PostgreSQL when schema drifted ahead of Alembic."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        if not conn.execute(
+            text("SELECT to_regclass('public.animals') IS NOT NULL")
+        ).scalar():
+            return
+        conn.execute(
+            text("ALTER TABLE animals ADD COLUMN IF NOT EXISTS health_care_other TEXT")
+        )
+        conn.execute(
+            text("ALTER TABLE animals ADD COLUMN IF NOT EXISTS character_other TEXT")
+        )
+
