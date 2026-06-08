@@ -26,7 +26,13 @@ class CommsEventBroker(ABC):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.warning("No running event loop; skipped WS delivery for user_id=%s", user_id)
+            from app.modules.communications.runtime import get_main_event_loop
+
+            loop = get_main_event_loop()
+            if loop is None or not loop.is_running():
+                logger.warning("No running event loop; skipped WS delivery for user_id=%s", user_id)
+                return
+            asyncio.run_coroutine_threadsafe(self.deliver(user_id, payload), loop)
             return
         loop.create_task(self.deliver(user_id, payload))
 

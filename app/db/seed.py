@@ -914,6 +914,7 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
     richi = db.query(Animal).filter(Animal.name == "Ричи").first()
     marusya = db.query(Animal).filter(Animal.name == "Маруся").first()
     grey = db.query(Animal).filter(Animal.name == "Грей").first()
+    bonya = db.query(Animal).filter(Animal.name == "Боня").first()
     rows = [
         {
             "organization_id": org1.id,
@@ -1035,6 +1036,70 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "is_published": True,
             "is_archived": False,
         },
+        {
+            "organization_id": org1.id,
+            "animal_id": richi.id if richi and richi.organization_id == org1.id else None,
+            "title": "Сбор на стационар для Ричи",
+            "description": (
+                "После операции Ричи нужен суточный стационар, антибиотики и контрольный осмотр хирурга."
+            ),
+            "city": "Екатеринбург",
+            "address": "ул. Белинского, 7",
+            "help_type": "medical",
+            "is_urgent": True,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 12000.0,
+            "deadline_at": datetime(2026, 6, 20, 18, 0, 0),
+            "deadline_note": "Оплатить стационар нужно до конца недели",
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org2.id,
+            "animal_id": bonya.id if bonya and bonya.organization_id == org2.id else None,
+            "title": "Сбор на корм для Бони",
+            "description": "Нужен лечебный рацион на месяц: Боня восстанавливается после стресса в приюте.",
+            "city": "Санкт-Петербург",
+            "address": None,
+            "help_type": "food",
+            "is_urgent": True,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 6500.0,
+            "deadline_at": None,
+            "deadline_note": None,
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
+        {
+            "organization_id": org2.id,
+            "animal_id": grey.id if grey and grey.organization_id == org2.id else None,
+            "title": "Сбор на амуницию для Грея",
+            "description": (
+                "Грею нужны прочный шлейка, поводок и намордник для безопасных прогулок на выставках пристройства."
+            ),
+            "city": "Санкт-Петербург",
+            "address": "пр. Заботы, 5",
+            "help_type": "financial",
+            "is_urgent": True,
+            "volunteer_needed": False,
+            "volunteer_requirements": None,
+            "volunteer_competencies_json": "[]",
+            "target_amount": 4500.0,
+            "deadline_at": datetime(2026, 6, 25, 12, 0, 0),
+            "deadline_note": None,
+            "media_path": None,
+            "status": "open",
+            "is_published": True,
+            "is_archived": False,
+        },
     ]
     for spec in rows:
         item = db.query(HelpRequest).filter(HelpRequest.title == spec["title"]).first()
@@ -1046,6 +1111,11 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
                 continue
             setattr(item, key, value)
 
+    retired = db.query(HelpRequest).filter(HelpRequest.title == "Сбор на ремонт вольера").first()
+    if retired is not None:
+        retired.is_archived = True
+        retired.is_published = False
+
     _sync_help_demo_animal_links(db)
 
 
@@ -1054,6 +1124,9 @@ def _sync_help_demo_animal_links(db: Session) -> None:
         ("На операцию на лапу", "Муся"),
         ("На корм Gastrointestinal", "Маруся"),
         ("Новые поводки и ошейники", "Грей"),
+        ("Сбор на стационар для Ричи", "Ричи"),
+        ("Сбор на корм для Бони", "Боня"),
+        ("Сбор на амуницию для Грея", "Грей"),
     )
     for title, animal_name in links:
         animal = db.query(Animal).filter(Animal.name == animal_name).first()

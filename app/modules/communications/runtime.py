@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.core.config import settings
 from app.modules.communications.broker import CommsEventBroker, create_comms_broker
 from app.modules.communications.notifier import CommunicationsNotifier
@@ -8,6 +10,7 @@ from app.modules.communications.ws_manager import ConnectionManager
 _manager = ConnectionManager()
 _broker: CommsEventBroker | None = None
 _notifier: CommunicationsNotifier | None = None
+_main_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_connection_manager() -> ConnectionManager:
@@ -28,7 +31,13 @@ def get_comms_notifier() -> CommunicationsNotifier:
     return _notifier
 
 
+def get_main_event_loop() -> asyncio.AbstractEventLoop | None:
+    return _main_loop
+
+
 async def startup_communications() -> None:
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     await get_comms_broker().start()
 
 
