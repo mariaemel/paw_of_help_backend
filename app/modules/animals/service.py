@@ -12,6 +12,7 @@ from app.modules.animals.catalog_marks import (
 )
 from app.modules.animals.display_catalog import AGE_GROUPS, SPECIES_LABELS
 from app.modules.animals.repository import AnimalRepository
+from app.modules.help.visibility import is_public_listable
 from app.modules.animals.schemas import (
     AgeGroupOption,
     AnimalCatalogsResponse,
@@ -167,7 +168,7 @@ class AnimalService:
                     deadline_at=r.deadline_at,
                 )
                 for r in (animal.help_requests or [])
-                if not r.is_archived and r.is_published and (r.status or "").strip().lower() != "closed"
+                if is_public_listable(r)
             ],
             created_at=animal.created_at,
         )

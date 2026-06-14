@@ -87,6 +87,15 @@ def register_for_event(
     return service.register_for_event(event_id, user)
 
 
+@router.delete("/{event_id}/register", response_model=EventRegistrationResponse)
+def unregister_from_event(
+    event_id: int,
+    user: User = Depends(get_current_user),
+    service: EventService = Depends(get_event_service),
+):
+    return service.unregister_from_event(event_id, user)
+
+
 @router.post("", response_model=EventDetail)
 def create_event(
     payload: EventCreateRequest,

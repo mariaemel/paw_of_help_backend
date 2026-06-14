@@ -9,6 +9,7 @@ from app.modules.animals.catalog_constants import (
     LABEL_HEALTH_NOTES,
     LABEL_URGENT,
 )
+from app.modules.animals.catalog_labels import resolve_catalog_label
 from app.modules.animals.schemas import FeatureFilterOption
 
 if TYPE_CHECKING:
@@ -23,14 +24,17 @@ def animal_has_health_issue_notes(animal: Animal) -> bool:
 
 
 def labels_for_catalog_kind(animal: Animal, kind: str) -> list[str]:
-    rows: list[tuple[int, str]] = []
+    rows: list[tuple[int, str, str]] = []
     for asg in animal.catalog_assignments or []:
         ci = asg.catalog_item
         if ci is None or ci.kind != kind:
             continue
-        rows.append((ci.sort_order, ci.label))
-    rows.sort(key=lambda x: (x[0], x[1]))
-    return [r[1] for r in rows]
+        rows.append((int(ci.sort_order or 0), ci.slug, ci.label))
+    rows.sort(key=lambda x: (x[0], x[2]))
+    return [
+        resolve_catalog_label(kind=kind, slug=slug, sex=animal.sex, fallback=fallback)
+        for _, slug, fallback in rows
+    ]
 
 
 def combined_catalog_feature_labels(animal: Animal) -> list[str]:

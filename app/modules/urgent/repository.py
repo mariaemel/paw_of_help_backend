@@ -5,7 +5,7 @@ from app.core.list_query import apply_city_filter, apply_text_search
 from app.models.animal import Animal
 from app.models.help_request import HelpRequest
 from app.models.organization import Organization
-from app.modules.urgent.schemas import UrgentFilterParams
+from app.modules.urgent.schemas import FUNDRAISING_HELP_TYPE_IDS, UrgentFilterParams
 
 
 class UrgentRepository:
@@ -60,13 +60,17 @@ class UrgentRepository:
         q = self.db.query(HelpRequest).filter(
             HelpRequest.is_archived.is_(False),
             HelpRequest.is_published.is_(True),
-            HelpRequest.is_urgent.is_(True),
             HelpRequest.status.in_(("open", "in_progress")),
         )
+        fundraising_types = {ht for ht in filters.help_types if ht in FUNDRAISING_HELP_TYPE_IDS}
+        if fundraising_types and len(fundraising_types) == len(filters.help_types):
+            q = q.filter(HelpRequest.help_type.in_(tuple(fundraising_types)))
+        else:
+            q = q.filter(HelpRequest.is_urgent.is_(True))
+            if filters.help_types:
+                q = q.filter(HelpRequest.help_type.in_(filters.help_types))
         q = apply_text_search(q, filters.q, HelpRequest.title, HelpRequest.description)
         q = apply_city_filter(q, HelpRequest.city, filters.city)
-        if filters.help_types:
-            q = q.filter(HelpRequest.help_type.in_(filters.help_types))
         if filters.animal_species and filters.animal_species != "all":
             q = q.join(Animal, Animal.id == HelpRequest.animal_id).filter(Animal.species == filters.animal_species)
         return q

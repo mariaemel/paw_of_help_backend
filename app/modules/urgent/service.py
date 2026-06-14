@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi import HTTPException, status
 
+from app.core.cache_invalidation import invalidate_animals_cache, invalidate_organization_public
 from app.core.config import settings
 from app.models.help_request import HelpRequest
 from app.models.organization import Organization
@@ -14,6 +15,7 @@ from app.modules.help_requests.requisites import (
 )
 from app.modules.urgent.repository import UrgentRepository
 from app.modules.urgent.schemas import (
+    FUNDRAISING_HELP_TYPE_IDS,
     HELP_TYPE_OPTIONS,
     VOLUNTEER_TASK_TYPE_OPTIONS,
     CatalogOption,
@@ -107,6 +109,10 @@ class UrgentService:
     @staticmethod
     def _apply_payment_bank_account(req: HelpRequest, org: Organization, bank_account: str | None) -> None:
         req.payment_bank_account = stored_payment_bank_account(org, bank_account)
+
+    def _invalidate_public_help_cache(self, organization_id: int) -> None:
+        invalidate_animals_cache()
+        invalidate_organization_public(organization_id)
 
     def _to_item(self, req: HelpRequest) -> UrgentRequestListItem:
         badges: list[str] = []
@@ -244,6 +250,7 @@ class UrgentService:
         self._apply_payment_bank_account(req, org, payload.bank_account)
         self.repo.db.add(req)
         self.repo.db.commit()
+        self._invalidate_public_help_cache(org.id)
         return self.get_detail_for_owner(req.id, org.id)
 
     def update_request(self, request_id: int, user: User, payload: UrgentRequestUpdate) -> UrgentRequestDetail:
@@ -317,6 +324,7 @@ class UrgentService:
         if "bank_account" in payload.model_fields_set:
             self._apply_payment_bank_account(req, org, payload.bank_account)
         self.repo.db.commit()
+        self._invalidate_public_help_cache(org.id)
         return self.get_detail_for_owner(req.id, org.id)
 
     def close_request(self, request_id: int, user: User) -> UrgentRequestDetail:
@@ -328,4 +336,5 @@ class UrgentService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only manage own help requests")
         req.status = "closed"
         self.repo.db.commit()
+        self._invalidate_public_help_cache(org.id)
         return self.get_detail_for_owner(req.id, org.id)

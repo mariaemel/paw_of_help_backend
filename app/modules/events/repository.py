@@ -113,3 +113,13 @@ class EventRepository:
         registration = EventRegistration(user_id=user_id, event_id=event_id)
         self.db.add(registration)
         return registration
+
+    def get_user_registration(self, user_id: int, event_id: int) -> EventRegistration | None:
+        return (
+            self.db.query(EventRegistration)
+            .filter(EventRegistration.user_id == user_id, EventRegistration.event_id == event_id)
+            .first()
+        )
+
+    def delete_registration(self, registration: EventRegistration) -> None:
+        self.db.delete(registration)

@@ -271,6 +271,26 @@ class EventService:
         meta = _event_registration_meta(event, is_registered=True)
         return EventRegistrationResponse(event_id=event.id, **meta)
 
+    def unregister_from_event(self, event_id: int, user: User) -> EventRegistrationResponse:
+        row = self.repo.get_event(event_id)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        event, _org = row
+        registration = self.repo.get_user_registration(user.id, event.id)
+        if registration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Вы не записаны на это мероприятие",
+            )
+        entry = (event.entry_type or "free").strip().lower()
+        self.repo.delete_registration(registration)
+        if entry == "limited":
+            event.seats_taken = max(int(event.seats_taken or 0) - 1, 0)
+        self.repo.db.commit()
+        self.repo.db.refresh(event)
+        meta = _event_registration_meta(event, is_registered=False)
+        return EventRegistrationResponse(event_id=event.id, is_registered=False, **meta)
+
     def archive_event(self, event_id: int, user: User) -> EventDetail:
         org = self._organization_for_user(user)
         row = self.repo.get_event_for_owner(event_id)

@@ -1,5 +1,5 @@
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Query, Session, joinedload, selectinload
 
 from app.models.adoption_application import AnimalAdoptionApplication
 from app.models.animal import Animal, AnimalPhoto
@@ -302,7 +302,20 @@ class AccountRepository:
         replace_kind("health_care", health_care_slugs)
         replace_kind("character", character_slugs)
 
-    def count_org_help_requests(self, organization_id: int, q: str | None, type_group: str | None) -> int:
+    @staticmethod
+    def _apply_org_help_requests_tab(query: Query, tab: str | None) -> Query:
+        tab_norm = (tab or "all").strip().lower()
+        query = query.filter(HelpRequest.is_archived.is_(False))
+        if tab_norm in ("draft", "drafts"):
+            return query.filter(HelpRequest.is_published.is_(False))
+        query = query.filter(HelpRequest.is_published.is_(True))
+        if tab_norm == "fundraising":
+            return query.filter(HelpRequest.help_type.in_(("financial", "food", "medical")))
+        if tab_norm == "volunteer_task":
+            return query.filter(~HelpRequest.help_type.in_(("financial", "food", "medical")))
+        return query
+
+    def count_org_help_requests(self, organization_id: int, q: str | None, tab: str | None) -> int:
         query = self.db.query(HelpRequest).filter(HelpRequest.organization_id == organization_id)
         if q and q.strip():
             like = f"%{q.strip().lower()}%"
@@ -312,14 +325,11 @@ class AccountRepository:
                     func.lower(HelpRequest.description).like(like),
                 )
             )
-        if type_group == "fundraising":
-            query = query.filter(HelpRequest.help_type.in_(("financial", "food", "medical")))
-        elif type_group == "volunteer_task":
-            query = query.filter(~HelpRequest.help_type.in_(("financial", "food", "medical")))
+        query = self._apply_org_help_requests_tab(query, tab)
         return int(query.count() or 0)
 
     def list_org_help_requests(
-        self, organization_id: int, q: str | None, type_group: str | None, limit: int, offset: int
+        self, organization_id: int, q: str | None, tab: str | None, limit: int, offset: int
     ) -> list[HelpRequest]:
         query = (
             self.db.query(HelpRequest)
@@ -337,10 +347,7 @@ class AccountRepository:
                     func.lower(HelpRequest.description).like(like),
                 )
             )
-        if type_group == "fundraising":
-            query = query.filter(HelpRequest.help_type.in_(("financial", "food", "medical")))
-        elif type_group == "volunteer_task":
-            query = query.filter(~HelpRequest.help_type.in_(("financial", "food", "medical")))
+        query = self._apply_org_help_requests_tab(query, tab)
         return (
             query.order_by(HelpRequest.created_at.desc(), HelpRequest.id.desc())
             .offset(offset)
@@ -876,11 +883,39 @@ class AccountRepository:
         )
         return total, rows
 
-    def list_org_articles(self, owner_user_id: int, limit: int, offset: int) -> tuple[int, list[KnowledgeArticle]]:
+    def list_org_articles(
+        self, owner_user_id: int, limit: int, offset: int, tab: str = "all"
+    ) -> tuple[int, list[KnowledgeArticle]]:
+        tab_norm = (tab or "all").strip().lower()
         query = self.db.query(KnowledgeArticle).filter(
             KnowledgeArticle.author_user_id == owner_user_id,
             func.lower(KnowledgeArticle.owner_role) == "organization",
         )
+        if tab_norm == "archive":
+            query = query.filter(KnowledgeArticle.is_archived.is_(True))
+        elif tab_norm == "active":
+            query = query.filter(KnowledgeArticle.is_archived.is_(False))
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return total, rows
+
+    def list_volunteer_articles(
+        self, author_user_id: int, limit: int, offset: int, tab: str = "all"
+    ) -> tuple[int, list[KnowledgeArticle]]:
+        tab_norm = (tab or "all").strip().lower()
+        query = self.db.query(KnowledgeArticle).filter(
+            KnowledgeArticle.author_user_id == author_user_id,
+            func.lower(KnowledgeArticle.owner_role) == "volunteer",
+        )
+        if tab_norm == "archive":
+            query = query.filter(KnowledgeArticle.is_archived.is_(True))
+        elif tab_norm == "active":
+            query = query.filter(KnowledgeArticle.is_archived.is_(False))
         total = int(query.count() or 0)
         rows = (
             query.order_by(KnowledgeArticle.created_at.desc(), KnowledgeArticle.id.desc())

@@ -127,8 +127,10 @@ class EventUpdateRequest(BaseModel):
 
 class EventRegistrationResponse(BaseModel):
     event_id: int
+    entry_type: str = "free"
+    capacity: int | None = None
     seats_taken: int
     seats_available: int | None = None
     is_full: bool
-    is_registered: bool = True
+    is_registered: bool = False
     registration_action: str

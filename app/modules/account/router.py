@@ -10,6 +10,7 @@ from app.modules.account.repository import AccountRepository
 from app.modules.account import schemas as s
 from app.modules.account.service import AccountService
 from app.modules.organizations.schemas import OrganizationPublicPage
+from app.modules.knowledge.schemas import KnowledgeDetail, KnowledgeUpdateRequest, KnowledgeUpsertRequest
 from app.modules.urgent.schemas import UrgentRequestCreate, UrgentRequestDetail, UrgentRequestUpdate
 from app.modules.volunteers.schemas import VolunteerCompletedTasksResponse, VolunteerTaskFeedResponse
 from app.modules.volunteers.task_feed_service import VolunteerTaskFeedService
@@ -195,11 +196,12 @@ def cancel_my_volunteer_response(
 def submit_my_volunteer_response_report(
     response_id: int,
     content: str = Form(..., min_length=10, max_length=16000),
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
+    file: UploadFile | None = File(default=None),
     user: User = Depends(require_volunteer_role),
     service: AccountService = Depends(get_account_service),
 ):
-    return service.submit_volunteer_response_report(user, response_id, content, files)
+    return service.submit_volunteer_response_report(user, response_id, content, files, file)
 
 
 @router.get("/volunteer/responses/{response_id}/report", response_model=s.VolunteerReportOut)
@@ -632,7 +634,10 @@ def reject_org_incoming_volunteer_report(
 @router.get("/organization/help-requests", response_model=s.OrgOwnedHelpRequestListResponse)
 def list_org_help_requests(
     q: str | None = Query(default=None),
-    tab: str | None = Query(default="all", description="all | fundraising | volunteer_task"),
+    tab: str | None = Query(
+        default="all",
+        description="all | fundraising | volunteer_task | drafts — черновики (is_published=false)",
+    ),
     limit: int = Query(default=30, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(require_organization_role),
@@ -777,9 +782,129 @@ def list_org_events(
 
 @router.get("/organization/articles", response_model=s.OrgArticleListResponse)
 def list_org_articles(
+    tab: Literal["all", "active", "archive"] = Query(
+        default="all",
+        description="all — все статьи; active — без архива; archive — только архив",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(require_organization_role),
     service: AccountService = Depends(get_account_service),
 ):
-    return service.list_org_articles(user, limit, offset)
+    return service.list_org_articles(user, tab, limit, offset)
+
+
+@router.get("/organization/articles/{article_id}", response_model=KnowledgeDetail)
+def get_org_article(
+    article_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.get_org_article(user, article_id)
+
+
+@router.post(
+    "/organization/articles",
+    response_model=KnowledgeDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_org_article(
+    payload: KnowledgeUpsertRequest,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.create_org_article(user, payload)
+
+
+@router.patch("/organization/articles/{article_id}", response_model=KnowledgeDetail)
+def update_org_article(
+    article_id: int,
+    payload: KnowledgeUpdateRequest,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.update_org_article(user, article_id, payload)
+
+
+@router.post("/organization/articles/{article_id}/archive", response_model=KnowledgeDetail)
+def archive_org_article(
+    article_id: int,
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.archive_org_article(user, article_id)
+
+
+@router.post("/organization/articles/{article_id}/cover", response_model=KnowledgeDetail)
+def upload_org_article_cover(
+    article_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_organization_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.upload_org_article_cover(user, article_id, file)
+
+
+@router.get("/volunteer/articles", response_model=s.OrgArticleListResponse)
+def list_volunteer_articles(
+    tab: Literal["all", "active", "archive"] = Query(
+        default="all",
+        description="all — все статьи; active — без архива; archive — только архив",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.list_volunteer_articles(user, tab, limit, offset)
+
+
+@router.get("/volunteer/articles/{article_id}", response_model=KnowledgeDetail)
+def get_volunteer_article(
+    article_id: int,
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.get_volunteer_article(user, article_id)
+
+
+@router.post(
+    "/volunteer/articles",
+    response_model=KnowledgeDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_volunteer_article(
+    payload: KnowledgeUpsertRequest,
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.create_volunteer_article(user, payload)
+
+
+@router.patch("/volunteer/articles/{article_id}", response_model=KnowledgeDetail)
+def update_volunteer_article(
+    article_id: int,
+    payload: KnowledgeUpdateRequest,
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.update_volunteer_article(user, article_id, payload)
+
+
+@router.post("/volunteer/articles/{article_id}/archive", response_model=KnowledgeDetail)
+def archive_volunteer_article(
+    article_id: int,
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.archive_volunteer_article(user, article_id)
+
+
+@router.post("/volunteer/articles/{article_id}/cover", response_model=KnowledgeDetail)
+def upload_volunteer_article_cover(
+    article_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_volunteer_role),
+    service: AccountService = Depends(get_account_service),
+):
+    return service.upload_volunteer_article_cover(user, article_id, file)

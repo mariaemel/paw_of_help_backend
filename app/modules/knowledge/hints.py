@@ -21,6 +21,8 @@ _HELP_TYPE_CATEGORIES: dict[str, frozenset[str]] = {
 
 _MEDICAL_CATEGORIES = frozenset({"first_aid", "treatment"})
 _PHOTO_CATEGORIES = frozenset({"training", "care"})
+_POISONING_TASK_PATTERN = re.compile(r"отравл", re.I)
+_POISONING_ARTICLE_PATTERN = re.compile(r"отравл", re.I)
 
 _SPECIES_KEYWORDS: dict[str, tuple[str, ...]] = {
     "cat": ("кош", "кот", "кошк", "котён", "котен", "котят"),
@@ -34,14 +36,18 @@ _COMPETENCY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "photo_video": ("фотос", "фотограф", "съём", "съем", "видеос", "кадр", "сним"),
     "manual": ("убор", "корм", "приют", "вольер", "руками"),
     "auto": ("авто", "перевоз", "транспорт", "достав", "водител", "машин"),
-    "medical": ("лечен", "медиц", "ветерин", "укол", "таблет", "клиник", "рентген", "отрав"),
+    "medical": ("лечен", "медиц", "ветерин", "укол", "таблет", "клиник", "рентген"),
     "food": ("корм", "кормлен"),
     "financial": ("сбор", "оплат", "перевод"),
 }
 
 _TASK_TOPIC_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
     (re.compile(r"перевоз|транспорт|авто|довез|подвез|водител", re.I), ("перевоз", "авто", "транспорт"), "transport"),
-    (re.compile(r"клиник|ветерин|рентген|лечен|операц|отрав|болезн|медиц", re.I), ("клиник", "ветерин", "лечение"), "medical"),
+    (
+        re.compile(r"клиник|ветерин|рентген|лечен|операц|отравл|болезн", re.I),
+        ("клиник", "ветерин", "лечение"),
+        "medical",
+    ),
     (re.compile(r"выгул|прогул|гуля", re.I), ("выгул", "прогулка"), "walk"),
     (re.compile(r"передерж", re.I), ("передержка", "передерж"), "foster"),
     (re.compile(r"убор|вольер|приют", re.I), ("приют", "уборка"), "shelter"),
@@ -56,6 +62,12 @@ _TOPIC_BY_HELP_TYPE: dict[str, str] = {
     "foster": "foster",
     "manual": "shelter",
     "walk": "walk",
+    "food": "shelter",
+    "financial": "shelter",
+    "rescue": "medical",
+    "events": "shelter",
+    "fundraising": "shelter",
+    "texts_social": "photo",
 }
 
 _INCOMPATIBLE_TOPICS: dict[str, frozenset[str]] = {
@@ -143,12 +155,21 @@ def _species_conflict(task_species: str | None, article_species: frozenset[str])
     return task_species not in article_species
 
 
-def infer_task_topics(*, task_text: str | None, help_type: str | None) -> frozenset[str]:
+def infer_task_topics(
+    *,
+    task_text: str | None,
+    help_type: str | None,
+    competency_slugs: frozenset[str] = frozenset(),
+) -> frozenset[str]:
     topics: set[str] = set()
     text = (task_text or "").strip()
     ht = (help_type or "").strip().lower()
     if ht in _TOPIC_BY_HELP_TYPE:
         topics.add(_TOPIC_BY_HELP_TYPE[ht])
+    for slug in competency_slugs:
+        mapped = _TOPIC_BY_HELP_TYPE.get(slug)
+        if mapped:
+            topics.add(mapped)
     for pattern, _tokens, topic in _TASK_TOPIC_PATTERNS:
         if text and pattern.search(text):
             topics.add(topic)
@@ -177,8 +198,10 @@ def _infer_article_topics(article: KnowledgeArticle) -> frozenset[str]:
 
 
 def _topics_compatible(task_topics: frozenset[str], article_topics: frozenset[str]) -> bool:
-    if not task_topics or not article_topics:
+    if not article_topics:
         return True
+    if not task_topics:
+        return False
 
     if task_topics & article_topics:
         return True
@@ -193,7 +216,7 @@ def _topics_compatible(task_topics: frozenset[str], article_topics: frozenset[st
     if "medical" in task_topics and article_topics <= {"photo"}:
         return False
 
-    return not task_topics or not article_topics
+    return False
 
 
 def _category_fallback_score(help_type: str, category: str) -> float:
@@ -214,13 +237,39 @@ def _count_keyword_hits(task_keywords: set[str], article_head: str) -> int:
     return hits
 
 
+def _poisoning_hint_allowed(
+    article: KnowledgeArticle,
+    ctx: HintContext,
+    task_topics: frozenset[str],
+) -> bool:
+    head = _head_blob(article)
+    if not _POISONING_ARTICLE_PATTERN.search(head):
+        return True
+    task_text = (ctx.task_text or "").strip()
+    if _POISONING_TASK_PATTERN.search(task_text):
+        return True
+    if "medical" in task_topics:
+        return True
+    if (ctx.help_type or "").strip().lower() == "medical":
+        return True
+    if "medical" in ctx.competency_slugs:
+        return True
+    return False
+
+
 def score_hint(article: KnowledgeArticle, ctx: HintContext) -> ScoredHint | None:
     if not article.is_context_tip or article.is_archived or not article.is_published:
         return None
 
-    task_topics = infer_task_topics(task_text=ctx.task_text, help_type=ctx.help_type)
+    task_topics = infer_task_topics(
+        task_text=ctx.task_text,
+        help_type=ctx.help_type,
+        competency_slugs=ctx.competency_slugs,
+    )
     article_topics = _infer_article_topics(article)
     if not _topics_compatible(task_topics, article_topics):
+        return None
+    if not _poisoning_hint_allowed(article, ctx, task_topics):
         return None
 
     reasons: list[str] = []
@@ -237,13 +286,14 @@ def score_hint(article: KnowledgeArticle, ctx: HintContext) -> ScoredHint | None
     target_types = _article_json_list(getattr(article, "target_help_types_json", None))
     target_species = _article_json_list(getattr(article, "target_species_json", None))
     target_comps = _article_json_list(getattr(article, "target_competency_slugs_json", None))
-    article_keywords = _article_json_list(getattr(article, "keywords_json", None))
 
     if target_types:
         if help_type and help_type in target_types:
             score += 30.0
             reasons.append("help_type")
         elif help_type:
+            return None
+        elif not (ctx.competency_slugs & target_comps):
             return None
     elif help_type:
         category_score = _category_fallback_score(help_type, article.category)
@@ -287,8 +337,7 @@ def score_hint(article: KnowledgeArticle, ctx: HintContext) -> ScoredHint | None
             if matched:
                 break
 
-    task_keywords = set(ctx.keywords) | set(article_keywords)
-    keyword_hits = _count_keyword_hits(task_keywords, head)
+    keyword_hits = _count_keyword_hits(set(ctx.keywords), head)
     if keyword_hits:
         score += min(18.0, 7.0 * keyword_hits)
         reasons.append("keywords")

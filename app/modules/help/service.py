@@ -120,6 +120,41 @@ def _orphan_photo(hr) -> str | None:
     return None
 
 
+def _monetary_brief(hr, bucket: str) -> HelpMonetaryBrief:
+    amt_raw = getattr(hr, "target_amount", None)
+    amt: float | None = float(amt_raw) if amt_raw is not None and amt_raw > 0 else None
+    return HelpMonetaryBrief(
+        request_id=int(hr.id),
+        help_bucket=bucket,
+        line=str(hr.title).strip(),
+        amount_rub=amt,
+    )
+
+
+def _build_linked_fundraising_card(hr) -> HelpAnimalCard | None:
+    animal = getattr(hr, "animal", None)
+    if animal is None:
+        return None
+    bucket = help_bucket_for_request(hr)
+    if bucket is None:
+        return None
+    return HelpAnimalCard(
+        animal_id=int(animal.id),
+        organization_id=int(hr.organization_id) if hr.organization_id is not None else None,
+        name=animal.name,
+        species_tag=species_label_ru(animal.species, animal.sex),
+        age_tag=_age_tag_ru(int(animal.age_months or 0)),
+        age_months=int(animal.age_months or 0),
+        status_chip="Сбор средств",
+        organization_name=(hr.organization.name if getattr(hr, "organization", None) else None),
+        location_city=getattr(hr, "city", None) or getattr(animal, "location_city", None),
+        is_urgent=bool(getattr(hr, "is_urgent", False)),
+        monetary=[_monetary_brief(hr, bucket)],
+        adopt_ready=False,
+        primary_photo_url=_primary_photo(animal),
+    )
+
+
 def _build_help_orphan_card(hr) -> HelpAnimalCard | None:
     bucket = help_bucket_for_orphan_request(hr)
     if bucket is None:
@@ -224,6 +259,18 @@ class HelpService:
             items_out.sort(key=lambda c: (-int(c.is_urgent), -int(c.monetary[0].request_id if c.monetary else 0)))
 
         return HelpListResponse(tab=tl, total=len(items_out), items=items_out)
+
+    def list_fundraising_cards(self) -> HelpListResponse:
+        items_out: list[HelpAnimalCard] = []
+        for hr in self.repo.list_public_fundraising_requests():
+            if hr.animal_id is None:
+                card = _build_help_orphan_card(hr)
+            else:
+                card = _build_linked_fundraising_card(hr)
+            if card is not None:
+                items_out.append(card)
+        _sort_tab_all(items_out)
+        return HelpListResponse(tab="fundraising", total=len(items_out), items=items_out)
 
     def list_cards_for_organization(self, organization_id: int) -> list[HelpAnimalCard]:
         items_out: list[HelpAnimalCard] = []

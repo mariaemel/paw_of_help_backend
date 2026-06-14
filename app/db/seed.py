@@ -964,7 +964,7 @@ def ensure_demo_urgent_requests(db: Session, org1: Organization, org2: Organizat
             "city": "Санкт-Петербург",
             "address": None,
             "help_type": "financial",
-            "is_urgent": False,
+            "is_urgent": True,
             "volunteer_needed": False,
             "volunteer_requirements": None,
             "volunteer_competencies_json": "[]",

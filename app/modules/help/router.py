@@ -20,3 +20,8 @@ def list_help_animals(
     service: HelpService = Depends(get_help_service),
 ):
     return service.list_cards(tab)
+
+
+@router.get("/fundraising", response_model=HelpListResponse)
+def list_help_fundraising(service: HelpService = Depends(get_help_service)):
+    return service.list_fundraising_cards()

@@ -204,6 +204,14 @@ class VolunteerHelpResponseListResponse(BaseModel):
 
 class VolunteerReportCreate(BaseModel):
     content: str = Field(min_length=10, max_length=16000)
+    photo_count_min: int = Field(
+        default=1,
+        description="Минимальное число фото в отчёте",
+    )
+    photo_count_max: int = Field(
+        default=3,
+        description="Максимальное число фото в отчёте",
+    )
 
 
 class VolunteerReportOut(BaseModel):
@@ -525,6 +533,7 @@ class OrgOwnedHelpRequestItem(BaseModel):
     animal_photo_url: str | None = None
     status: str
     is_urgent: bool
+    is_published: bool = Field(description="False — черновик, не показывается в публичных лентах")
     target_amount: float | None = None
     deadline_at: datetime | None = None
     deadline_note: str | None = None
@@ -623,14 +632,19 @@ class OrgEventListResponse(BaseModel):
 class OrgArticleItem(BaseModel):
     id: int
     title: str
+    summary: str | None = None
     category: str
+    category_label: str | None = None
     read_minutes: int
     cover_url: str | None = None
     is_published: bool
     is_archived: bool
+    status_label: str = Field(description="Активна | Черновик | Архив")
+    can_edit: bool = True
     created_at: datetime
 
 
 class OrgArticleListResponse(BaseModel):
+    tab: str = Field(description="all | active | archive")
     total: int
     items: list[OrgArticleItem]

@@ -24,6 +24,9 @@ from app.models.volunteer_help_response_report_photo import VolunteerHelpRespons
 from app.models.user import User, UserRole
 from app.modules.account.geocode import sync_volunteer_profile_coords
 from app.modules.account.repository import AccountRepository
+from app.modules.knowledge.repository import KnowledgeRepository
+from app.modules.knowledge.schemas import KB_CATEGORY_OPTIONS, KnowledgeDetail, KnowledgeUpdateRequest, KnowledgeUpsertRequest
+from app.modules.knowledge.service import KnowledgeService, _article_status_label
 from app.modules.auth.contact import normalize_phone_ru
 from app.modules.account import schemas as s
 from app.modules.account.storage import (
@@ -67,6 +70,18 @@ _HELP_TYPE_LABELS: dict[str, str] = {x["id"]: x["label"] for x in HELP_TYPE_OPTI
 _HELP_TYPE_LABELS.update({x["id"]: x["label"] for x in COMPETENCY_OPTIONS})
 
 MIN_ANIMAL_PHOTOS = 3
+VOLUNTEER_REPORT_PHOTOS_MIN = 1
+VOLUNTEER_REPORT_PHOTOS_MAX = 3
+
+
+def _normalize_report_upload_files(files: list[UploadFile] | None, file: UploadFile | None) -> list[UploadFile]:
+    out: list[UploadFile] = []
+    for item in files or []:
+        if item is not None and (item.filename or "").strip():
+            out.append(item)
+    if file is not None and (file.filename or "").strip():
+        out.append(file)
+    return out
 
 
 def _committed_photos(animal) -> list:
@@ -748,7 +763,10 @@ class AccountService:
                 can_send_report = True
             else:
                 can_send_report = False
-        can_view_report = st == VolunteerHelpResponseStatus.COMPLETED.value
+        can_view_report = rep is not None and st in (
+            VolunteerHelpResponseStatus.ACCEPTED.value,
+            VolunteerHelpResponseStatus.COMPLETED.value,
+        )
 
         thread_id: str | None = None
         if can_chat and hr and hr.organization_id:
@@ -862,14 +880,21 @@ class AccountService:
         user: User,
         response_id: int,
         content: str,
-        files: list[UploadFile],
+        files: list[UploadFile] | None,
+        file: UploadFile | None = None,
     ) -> s.VolunteerResponseDetail:
         if user.role != UserRole.VOLUNTEER:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
-        if len(files) < 3:
+        upload_files = _normalize_report_upload_files(files, file)
+        if len(upload_files) < VOLUNTEER_REPORT_PHOTOS_MIN:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="К отчёту нужно приложить минимум 3 фото",
+                detail=f"К отчёту нужно приложить минимум {VOLUNTEER_REPORT_PHOTOS_MIN} фото",
+            )
+        if len(upload_files) > VOLUNTEER_REPORT_PHOTOS_MAX:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"К отчёту можно приложить не больше {VOLUNTEER_REPORT_PHOTOS_MAX} фото",
             )
         row = self.repo.get_volunteer_response(response_id, user.id)
         if row is None:
@@ -898,7 +923,7 @@ class AccountService:
                 rep.org_rejection_reason = None
             for photo in list(rep.photos or []):
                 self.repo.db.delete(photo)
-        for idx, file in enumerate(files):
+        for idx, file in enumerate(upload_files):
             try:
                 path = save_volunteer_report_photo(settings.media_dir, row.id, file)
             except ValueError as exc:
@@ -1341,6 +1366,7 @@ class AccountService:
             animal_photo_url=_primary_photo_url(row.animal),
             status=row.status,
             is_urgent=bool(row.is_urgent),
+            is_published=bool(row.is_published),
             target_amount=row.target_amount,
             deadline_at=row.deadline_at,
             deadline_note=row.deadline_note,
@@ -2288,22 +2314,117 @@ class AccountService:
             ],
         )
 
-    def list_org_articles(self, user: User, limit: int, offset: int) -> s.OrgArticleListResponse:
+    def list_org_articles(
+        self, user: User, tab: str, limit: int, offset: int
+    ) -> s.OrgArticleListResponse:
         self._organization_for_user(user)
-        total, rows = self.repo.list_org_articles(int(user.id), limit, offset)
+        tab_norm = (tab or "all").strip().lower()
+        total, rows = self.repo.list_org_articles(int(user.id), limit, offset, tab=tab_norm)
+        category_labels = {x["id"]: x["label"] for x in KB_CATEGORY_OPTIONS}
         return s.OrgArticleListResponse(
+            tab=tab_norm,
             total=total,
             items=[
                 s.OrgArticleItem(
                     id=r.id,
                     title=r.title,
+                    summary=r.summary,
                     category=r.category,
+                    category_label=category_labels.get(r.category),
                     read_minutes=r.read_minutes,
                     cover_url=self._media_url(r.cover_path),
                     is_published=bool(r.is_published),
                     is_archived=bool(r.is_archived),
+                    status_label=_article_status_label(bool(r.is_published), bool(r.is_archived)),
+                    can_edit=True,
                     created_at=r.created_at,
                 )
                 for r in rows
             ],
         )
+
+    def get_org_article(self, user: User, article_id: int) -> KnowledgeDetail:
+        self._organization_for_user(user)
+        return self._knowledge_service().get_detail(article_id, viewer=user)
+
+    def create_org_article(self, user: User, payload: KnowledgeUpsertRequest) -> KnowledgeDetail:
+        self._organization_for_user(user)
+        return self._knowledge_service().create_article(user, payload)
+
+    def update_org_article(
+        self, user: User, article_id: int, payload: KnowledgeUpdateRequest
+    ) -> KnowledgeDetail:
+        self._organization_for_user(user)
+        return self._knowledge_service().update_article(article_id, user, payload)
+
+    def archive_org_article(self, user: User, article_id: int) -> KnowledgeDetail:
+        self._organization_for_user(user)
+        return self._knowledge_service().archive_article(article_id, user)
+
+    def upload_org_article_cover(
+        self, user: User, article_id: int, file: UploadFile
+    ) -> KnowledgeDetail:
+        self._organization_for_user(user)
+        return self._knowledge_service().upload_cover(article_id, user, file)
+
+    def list_volunteer_articles(
+        self, user: User, tab: str, limit: int, offset: int
+    ) -> s.OrgArticleListResponse:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        tab_norm = (tab or "all").strip().lower()
+        total, rows = self.repo.list_volunteer_articles(int(user.id), limit, offset, tab=tab_norm)
+        category_labels = {x["id"]: x["label"] for x in KB_CATEGORY_OPTIONS}
+        return s.OrgArticleListResponse(
+            tab=tab_norm,
+            total=total,
+            items=[
+                s.OrgArticleItem(
+                    id=r.id,
+                    title=r.title,
+                    summary=r.summary,
+                    category=r.category,
+                    category_label=category_labels.get(r.category),
+                    read_minutes=r.read_minutes,
+                    cover_url=self._media_url(r.cover_path),
+                    is_published=bool(r.is_published),
+                    is_archived=bool(r.is_archived),
+                    status_label=_article_status_label(bool(r.is_published), bool(r.is_archived)),
+                    can_edit=True,
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ],
+        )
+
+    def get_volunteer_article(self, user: User, article_id: int) -> KnowledgeDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        return self._knowledge_service().get_detail(article_id, viewer=user)
+
+    def create_volunteer_article(self, user: User, payload: KnowledgeUpsertRequest) -> KnowledgeDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        return self._knowledge_service().create_article(user, payload)
+
+    def update_volunteer_article(
+        self, user: User, article_id: int, payload: KnowledgeUpdateRequest
+    ) -> KnowledgeDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        return self._knowledge_service().update_article(article_id, user, payload)
+
+    def archive_volunteer_article(self, user: User, article_id: int) -> KnowledgeDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        return self._knowledge_service().archive_article(article_id, user)
+
+    def upload_volunteer_article_cover(
+        self, user: User, article_id: int, file: UploadFile
+    ) -> KnowledgeDetail:
+        if user.role != UserRole.VOLUNTEER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только для волонтёров")
+        return self._knowledge_service().upload_cover(article_id, user, file)
+
+    def _knowledge_service(self) -> KnowledgeService:
+        return KnowledgeService(KnowledgeRepository(self.repo.db))

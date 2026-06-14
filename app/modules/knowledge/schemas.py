@@ -37,10 +37,12 @@ class KnowledgeMineItem(KnowledgeListItem):
     author_user_id: int | None = None
     is_published: bool
     is_archived: bool
+    status_label: str = Field(description="Активна | Черновик | Архив")
     can_edit: bool = True
 
 
 class KnowledgeMineListResponse(BaseModel):
+    tab: str = Field(description="all | active | archive")
     total: int
     items: list[KnowledgeMineItem]
 
@@ -58,6 +60,9 @@ class KnowledgeDetail(BaseModel):
     owner_role: str
     author_user_id: int | None = None
     can_edit: bool = False
+    is_published: bool = True
+    is_archived: bool = False
+    status_label: str = "Активна"
     created_at: datetime
     updated_at: datetime
 

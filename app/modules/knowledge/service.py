@@ -34,6 +34,14 @@ _AVERAGE_READING_WPM = 180
 _WORD_RE = re.compile(r"\b[\w'-]+\b", flags=re.UNICODE)
 
 
+def _article_status_label(is_published: bool, is_archived: bool) -> str:
+    if is_archived:
+        return "Архив"
+    if not is_published:
+        return "Черновик"
+    return "Активна"
+
+
 class KnowledgeService:
     def __init__(self, repo: KnowledgeRepository):
         self.repo = repo
@@ -65,7 +73,8 @@ class KnowledgeService:
             return False
         return (
             int(article.author_user_id) == int(user.id)
-            and str(article.owner_role) == KnowledgeService._user_role_value(user)
+            and str(article.owner_role).strip().lower()
+            == KnowledgeService._user_role_value(user).strip().lower()
         )
 
     @staticmethod
@@ -160,11 +169,16 @@ class KnowledgeService:
                 author_user_id=a.author_user_id,
                 is_published=bool(a.is_published),
                 is_archived=bool(a.is_archived),
+                status_label=_article_status_label(bool(a.is_published), bool(a.is_archived)),
                 can_edit=True,
             )
             for a in rows
         ]
-        return KnowledgeMineListResponse(total=total, items=items)
+        return KnowledgeMineListResponse(
+            tab=tab.strip().lower(),
+            total=total,
+            items=items,
+        )
 
     def list_context_hints(self, params: KnowledgeHintRequestParams) -> KnowledgeHintsResponse:
         ctx = HintContext(
@@ -205,6 +219,9 @@ class KnowledgeService:
             owner_role=row.owner_role,
             author_user_id=row.author_user_id,
             can_edit=self.can_edit_article(row, viewer),
+            is_published=bool(row.is_published),
+            is_archived=bool(row.is_archived),
+            status_label=_article_status_label(bool(row.is_published), bool(row.is_archived)),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -236,19 +253,12 @@ class KnowledgeService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
         self._ensure_can_edit(art, user)
 
-        for field in (
-            "title",
-            "summary",
-            "content",
-            "category",
-            "is_context_tip",
-            "is_published",
-        ):
-            value = getattr(payload, field)
-            if value is not None:
-                setattr(art, field, value)
-        if payload.content is not None:
-            art.read_minutes = self._estimate_read_minutes(payload.content)
+        patch = payload.model_dump(exclude_unset=True)
+        for field in ("title", "summary", "content", "category", "is_context_tip", "is_published"):
+            if field in patch:
+                setattr(art, field, patch[field])
+        if "content" in patch:
+            art.read_minutes = self._estimate_read_minutes(patch["content"])
 
         self.repo.db.commit()
         invalidate_knowledge_article(article_id)
